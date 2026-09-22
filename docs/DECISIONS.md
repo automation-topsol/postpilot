@@ -745,3 +745,66 @@ GitHub Actions cannot enumerate secrets — each one must be named in the
 workflow — so this cannot be automated away. The honest response is to document
 it prominently rather than to let someone discover it when a new brand silently
 publishes nothing.
+
+---
+
+## The adversarial pass — what the bugs had in common
+
+### "Not found" is only evidence when you actually looked
+
+Two of the seven defects were the same mistake wearing different clothes. A
+`--brand`-scoped run reconciled other brands' `unknown` rows with no captions
+loaded, and caption matching compared truncated prefixes. In both cases the
+reconciler received a negative answer that was not evidence of anything, and
+treated it as proof the post had never been published. The guarantee survives
+only because a *successful* negative lookup is genuine evidence of absence —
+so every path that can produce a fake negative is a path to a double publish.
+The fix in both cases was to make the scope explicit rather than implicit:
+`captions` is now the definitive list of what a run loaded, and matching
+requires whole-prefix containment with a minimum length rather than a
+truncated comparison.
+
+### A row copied is a row duplicated
+
+The tool assigns `ID` and treats it as immutable, which is right — but nothing
+stopped two rows carrying the same one, and copying a row to make a similar
+post is the single most natural thing a non-technical person does in a
+spreadsheet. The two rows then shared `_State`, so publishing one marked the
+other published and it silently never went out. Neither copy can be presumed
+the original, so both are stopped, and the message names the one-keystroke fix:
+clear the ID on the copy and it gets a new one.
+
+### EXIF is not metadata you can ignore
+
+Phone cameras do not rotate pixels; they record an orientation tag and leave
+the buffer as shot. Pillow does not apply it, and JPEG re-encoding discards it,
+so a portrait photo silently published sideways — and because the aspect-ratio
+logic ran on the un-rotated dimensions, it padded the wrong axis too, making it
+worse. One call to `ImageOps.exif_transpose` at the top of `_flatten` fixes
+both. Worth recording because the bug is invisible in code review and obvious
+to anyone looking at the post.
+
+### A status that understates is worse than one that alarms
+
+`published` on one platform plus `invalid` on another rolled up to
+`scheduled` — the one word that says "nothing needs you". The roll-up now
+distinguishes *pending* (queued, fine) from *blocked* (cannot go as things
+stand), and only the latter, alongside something already live, produces
+`partial`. A row still waiting on a platform that has not run yet is
+deliberately NOT `partial`, because `partial` should mean "look at me".
+
+### A read-only-sounding flag that mutates is a trap
+
+`--skip-media` reads like a way to inspect without touching Drive. It also
+changes what the content hash is computed from, so running it once re-opened
+every failed and invalid row and reset their attempts. Rather than making the
+hash mode-independent — which would mean either ignoring Drive changes or
+ignoring the Media text, both wrong — the flag now requires `--dry-run`. The
+capability is preserved, the footgun is not.
+
+### Silence is not success
+
+`--post <typo>` printed "nothing to do" and exited 0. For a command someone
+runs to publish one specific post, that is the worst possible response: it
+looks exactly like the post going out. Naming a post that does not exist is now
+an error, checked before anything is leased.

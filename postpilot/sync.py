@@ -171,16 +171,37 @@ def _sync_brand(
     out = BrandSync(brand=brand)
     writer = client.writer(tab)
 
-    existing_ids = {
-        row[COL_ID].strip()
+    id_col = header_index(tab.headers, "ID")
+    id_index = id_col if id_col is not None else COL_ID
+
+    seen_ids: list[str] = [
+        row[id_index].strip()
         for row in tab.rows
-        if len(row) > COL_ID and row[COL_ID].strip()
-    }
+        if len(row) > id_index and row[id_index].strip()
+    ]
+    existing_ids = set(seen_ids)
+    # Copying a row is the most natural thing a teammate does, and the ID comes
+    # along with it. Two rows sharing an ID would share `_State`, so one row's
+    # success would mark the other published and it would never go out. Neither
+    # copy can be presumed the original, so both are stopped with a fix that
+    # takes one keystroke.
+    duplicate_ids = {post_id for post_id in seen_ids if seen_ids.count(post_id) > 1}
 
     for index, row in enumerate(tab.rows):
         post = parse_post(brand, tab.headers, row, tab.row_number(index), tz_name)
         if post is None:
             continue
+
+        if post.post_id in duplicate_ids:
+            post.issues.append(
+                ValidationIssue(
+                    message=(
+                        f"duplicate ID {post.post_id!r}: more than one row has it, so their "
+                        f"statuses would collide. Clear the ID cell on the copied row and it "
+                        f"will be given a new one."
+                    )
+                )
+            )
 
         # Assign an ID on first sight. This is the key used everywhere after,
         # so it is written back immediately and never changes.
@@ -190,7 +211,6 @@ def _sync_brand(
             post.post_id = next_post_id(brand.id_prefix(), existing_ids)
             existing_ids.add(post.post_id)
             out.assigned_ids += 1
-            id_col = header_index(tab.headers, "ID")
             if write and id_col is not None:
                 writer.set_cell(post.row_number, id_col, post.post_id)
 

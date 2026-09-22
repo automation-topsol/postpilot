@@ -28,10 +28,11 @@ from postpilot.publishers.base import BrandCreds, Publisher, RemotePost
 
 log = get_logger(__name__)
 
-# How much of the caption has to line up for two posts to be the same post.
-# Captions get normalised by the platforms (whitespace, trailing hashtags), so
-# an exact match is too strict and a prefix match is about right.
-_MATCH_PREFIX = 60
+# The shorter caption must be at least this long before a prefix match is
+# trusted. Without a floor, a post captioned "Hi" matches anything beginning
+# with "Hi" — and reconciliation would mark the wrong post published, losing
+# ours and recording someone else's URL against it.
+_MIN_PREFIX_CHARS = 25
 
 
 @dataclass
@@ -52,13 +53,27 @@ def normalise_caption(text: str) -> str:
 
 
 def captions_match(ours: str, theirs: str) -> bool:
+    """Is this the same post?
+
+    Exact equality after normalisation, or one caption being a **whole prefix**
+    of the other. The prefix case is what survives the platforms appending
+    hashtags or truncating long text.
+
+    Deliberately NOT a truncated-prefix comparison. Comparing only the first N
+    characters makes "…Part ONE of our series" and "…Part TWO of our series"
+    identical, which is exactly the shape a brand posting a series produces —
+    and picking the wrong one records the wrong URL and loses a post.
+    """
     a, b = normalise_caption(ours), normalise_caption(theirs)
     if not a or not b:
         return False
     if a == b:
         return True
-    head = a[:_MATCH_PREFIX]
-    return bool(head) and (b.startswith(head) or a.startswith(b[:_MATCH_PREFIX]))
+
+    shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
+    if len(shorter) < _MIN_PREFIX_CHARS:
+        return False
+    return longer.startswith(shorter)
 
 
 def find_match(
@@ -86,7 +101,12 @@ def reconcile(
     window_minutes: int = 30,
     max_attempts: int = 3,
 ) -> ReconcileOutcome:
-    """Try to settle every `unknown` in `states`. Mutates them in place."""
+    """Try to settle every `unknown` in `states`. Mutates them in place.
+
+    `captions` doubles as the scope of the run: a state whose post is not in it
+    is skipped untouched, because without its caption we cannot tell "not
+    published" from "we did not look properly".
+    """
     now = now or dt.datetime.now(dt.UTC)
     window = dt.timedelta(minutes=window_minutes)
     outcome = ReconcileOutcome()
@@ -99,6 +119,16 @@ def reconcile(
     lookups: dict[tuple[str, Platform], list[RemotePost] | None] = {}
 
     for state in unknowns:
+        # `captions` is the authoritative list of posts THIS run loaded. A
+        # state outside it belongs to a brand we did not sync (a --brand run),
+        # so we have no caption to match on — and "no match" would then look
+        # like "not published" and reschedule something that may well be live.
+        # Leaving it completely untouched is the only safe move; a full run
+        # will settle it properly.
+        post_key = (state.post_id, state.platform)
+        if post_key not in captions:
+            continue
+
         key = (state.brand_slug, state.platform)
         publisher = publishers.get(state.platform)
         brand_creds = creds.get(state.brand_slug)
@@ -122,7 +152,17 @@ def reconcile(
             continue
 
         attempted_at = state.started_at or state.last_attempt_at or now
-        caption = captions.get((state.post_id, state.platform), "")
+        caption = captions[post_key]
+        if not caption.strip():
+            # Matching is by caption + time. With no caption there is nothing
+            # to match on, so a miss proves nothing and rescheduling could
+            # publish twice. A person has to look.
+            _leave_unknown(
+                state, outcome, now,
+                "this post has no caption, so it cannot be identified on the platform",
+            )
+            continue
+
         match = find_match(caption, attempted_at, candidates, window)
 
         if match is not None:

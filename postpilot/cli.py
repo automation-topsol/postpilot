@@ -105,11 +105,24 @@ def sync(
     brand: str = typer.Option(None, "--brand", help="Only sync this brand."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Compute everything, write nothing."),
     skip_media: bool = typer.Option(
-        False, "--skip-media", help="Do not check Drive; hashes fall back to the Media text."
+        False,
+        "--skip-media",
+        help="Inspect without Drive. Requires --dry-run, because it changes the content hash.",
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Validate rows, assign IDs, compute hashes, reconcile `_State`."""
+    if skip_media and not dry_run:
+        # Without Drive the hash falls back to the raw Media text, so every
+        # hash differs from the stored one — which would re-open every failed
+        # and invalid row across the whole Sheet, resetting their attempts.
+        # Harmless to published rows, but a nasty surprise, so it is refused
+        # rather than silently allowed.
+        _fail(
+            "--skip-media changes the content hash, which would re-open every failed row. "
+            "Add --dry-run to inspect without writing."
+        )
+
     settings = _settings(verbose)
     try:
         client = _client(settings)
@@ -196,6 +209,10 @@ def prepare(
             client, tz_name=settings.tunables.timezone, only_brand=brand, write=False, drive=drive
         )
         pairs = [(b.brand, p) for b in result.brands for p in b.posts]
+        if post and not any(p.post_id == post for _, p in pairs):
+            # Silently reporting "nothing to do" for a typo'd ID is the kind
+            # of no-op that gets mistaken for success.
+            _fail(f"no post with ID {post!r}" + (f" in brand {brand!r}" if brand else ""))
         prepared = run_prepare(
             pairs,
             drive,
@@ -255,6 +272,13 @@ def publish(
         store = R2Store.from_settings(settings)
         publishers = available_publishers()
         creds = _brand_creds(settings, client)
+
+        if post:
+            probe = run_sync(
+                client, tz_name=settings.tunables.timezone, only_brand=brand, write=False, drive=drive
+            )
+            if not any(p.post_id == post for b in probe.brands for p in b.posts):
+                _fail(f"no post with ID {post!r}" + (f" in brand {brand!r}" if brand else ""))
 
         result = run_publish(
             client,

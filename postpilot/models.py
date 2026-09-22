@@ -302,22 +302,26 @@ def roll_up_status(states: list[StateRow], *, is_draft: bool, has_issues: bool) 
     if PlatformState.PUBLISHING in kinds:
         return RowStatus.PUBLISHING
 
-    live = {s for s in kinds if s is not PlatformState.SKIPPED}
+    # `skipped` is a deliberate human decision, so it never drags the row down.
+    live = kinds - {PlatformState.SKIPPED}
     if not live:
         return RowStatus.SCHEDULED
 
     failed = {PlatformState.PERMANENT_FAILED, PlatformState.RETRYABLE_FAILED}
-    published = PlatformState.PUBLISHED in kinds
+    published = PlatformState.PUBLISHED in live
+    # Things that will NOT go out as the row currently stands.
+    blocked = live & (failed | {PlatformState.INVALID})
+    pending = live & {PlatformState.SCHEDULED}
 
-    if published and (live & failed):
-        # Some platforms succeeded, others did not: the distinction that
+    if published and blocked:
+        # Some platforms are live and others cannot go: the distinction that
         # matters most, because the fix is per platform.
         return RowStatus.PARTIAL
     if live <= {PlatformState.PUBLISHED}:
         return RowStatus.PUBLISHED
     if live & failed:
         return RowStatus.FAILED
-    if PlatformState.INVALID in kinds:
-        # Only invalid if nothing is still publishable.
-        return RowStatus.INVALID if live <= {PlatformState.INVALID} else RowStatus.SCHEDULED
+    if PlatformState.INVALID in live:
+        # Only `invalid` when nothing is still queued to go out.
+        return RowStatus.SCHEDULED if pending else RowStatus.INVALID
     return RowStatus.SCHEDULED

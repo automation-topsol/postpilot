@@ -69,8 +69,17 @@ def normalise(data: bytes, policy: MediaPolicy, *, source_name: str = "") -> Nor
 # Images
 # --------------------------------------------------------------------------
 def _flatten(img):
-    """Composite onto white. JPEG has no alpha, and PNG sources are common."""
-    from PIL import Image
+    """Apply EXIF rotation, then composite onto white.
+
+    Phone cameras record orientation in EXIF rather than rotating the pixels,
+    so a portrait photo arrives as landscape with a "rotate 90" tag. Pillow
+    does not apply that automatically and JPEG re-encoding drops the tag, so
+    without this the picture publishes sideways — and the aspect-ratio logic
+    would pad the wrong axis on the way.
+    """
+    from PIL import Image, ImageOps
+
+    img = ImageOps.exif_transpose(img) or img
 
     if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
         img = img.convert("RGBA")

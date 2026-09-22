@@ -90,6 +90,11 @@ class SheetClient:
         self._sheet_id = sheet_id
         self._book: gspread.Spreadsheet | None = None
         self._tabs: dict[str, Tab] = {}
+        # How many data rows each machine-owned tab last held. `publish`
+        # rewrites `_State` several times per run, and re-reading the whole tab
+        # before each write just to learn its old extent doubles the API calls
+        # for no information we do not already have.
+        self._row_counts: dict[str, int] = {}
 
     # -- opening ------------------------------------------------------------
     @property
@@ -124,6 +129,7 @@ class SheetClient:
         rows = values[1:] if len(values) > 1 else []
         tab = Tab(title=title, headers=headers, rows=rows, sheet_id=worksheet.id)
         self._tabs[title] = tab
+        self._row_counts[title] = len(rows)
         log.debug("read tab %s: %d data row(s)", title, len(rows))
         return tab
 
@@ -152,14 +158,24 @@ class SheetClient:
         """
         worksheet = self.book.worksheet(title)
         width = len(headers)
-        previous = len(self.read(title).rows) if self.read(title) else 0
+        # Trust the remembered extent; fall back to a read only the first time.
+        if title in self._row_counts:
+            previous = self._row_counts[title]
+        else:
+            tab = self.read(title)
+            previous = len(tab.rows) if tab else 0
+
         padded = [list(r) + [""] * (width - len(r)) for r in rows]
+        # Cover the old extent too, padding with blanks, so a shrinking tab
+        # leaves no stale rows behind — and do it in the same single update,
+        # so there is never a moment where the state is missing.
         blanks = [[""] * width for _ in range(max(0, previous - len(rows)))]
         body = [headers, *padded, *blanks]
         end = f"{a1_column(width - 1)}{len(body)}"
         worksheet.update(values=body, range_name=f"A1:{end}", value_input_option="RAW")
         log.info("rewrote %s: %d row(s)", title, len(rows))
         self._tabs.pop(title, None)
+        self._row_counts[title] = len(rows)
 
     def append_log(self, entries: list[LogEntry]) -> None:
         """Append to `_Log` in one call. Append-only, never rewritten."""
@@ -180,6 +196,7 @@ class SheetClient:
         self.book.worksheet(LOG_TAB).append_rows(rows, value_input_option="RAW")
         log.info("appended %d row(s) to %s", len(rows), LOG_TAB)
         self._tabs.pop(LOG_TAB, None)
+        self._row_counts.pop(LOG_TAB, None)
 
     # -- structure (sheet init) --------------------------------------------
     def ensure_tab(self, title: str, headers: list[str], *, rows: int = MAX_DATA_ROWS) -> tuple[Any, bool]:
@@ -196,6 +213,7 @@ class SheetClient:
             end = f"{a1_column(len(headers) - 1)}1"
             worksheet.update(values=[headers], range_name=f"A1:{end}", value_input_option="RAW")
         self._tabs.pop(title, None)
+        self._row_counts.pop(title, None)
         return worksheet, created
 
     def apply_structure(self, requests: list[dict]) -> None:

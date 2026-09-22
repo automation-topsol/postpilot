@@ -783,3 +783,53 @@ wiring the design does not remove, and it is called out in the README.
 instruction to disable the Actions cron. Two schedulers is the situation the
 lease *survives*, which is not the same as wanting it: each run duplicates
 work, and every ambiguous result costs a human a look at the platform.
+
+
+---
+
+## 18. Adversarial testing pass (2026-09-23)
+
+A deliberate bug hunt after Phase 7, probing the paths least covered by the
+phase work. **Seven real defects, two of them able to publish twice.** All
+fixed, all with named regression tests in `tests/test_regressions.py`.
+302 tests.
+
+| # | Defect | Severity |
+|---|---|---|
+| 1 | **`--brand X` reconciled EVERY brand's `unknown` rows.** Brand Y's captions were never loaded, so every match failed, so a post that HAD published was returned to `scheduled` and republished on the next full run. | **double publish** |
+| 2 | **Caption matching compared only the first 60 characters.** A series ("…Part ONE" / "…Part TWO") collided, and a short caption like "Hi" matched anything starting with it — marking the WRONG post published, losing ours and recording a stranger's URL. | **wrong/lost post** |
+| 3 | **EXIF orientation was ignored.** Phone cameras tag rotation instead of rotating pixels, so portrait photos published sideways, and the aspect logic padded the wrong axis. | visible on every phone photo |
+| 4 | **Duplicate post IDs were accepted.** Two rows sharing an ID shared `_State`, so publishing one marked the other published and it never went out. Copying a row is the most natural thing a teammate does. | silent lost post |
+| 5 | **`published` + `invalid` rolled up to `scheduled`** — reads as "queued, nothing wrong" when half the row is live and the other half can never go. | misleading status |
+| 6 | **Every `_State` write re-read the whole tab** just to learn its old extent. `publish` rewrites it several times a run. | wasted quota |
+| 7 | **`--post <typo>` reported "nothing to do" and exited 0**, indistinguishable from success. | silent no-op |
+
+### The two that mattered
+
+**#1 and #2 are the same shape**: something that looked like a safe "not
+found" was actually "we did not look properly". The reconciler's whole licence
+to reschedule rests on a negative lookup being *evidence of absence* — and both
+bugs produced negatives that were evidence of nothing. The fixes make the scope
+explicit: `captions` is now the authoritative list of what this run loaded, a
+state outside it is skipped untouched, and a post with no caption is handed to
+a human rather than guessed at.
+
+### Also hardened
+
+- **`sync --skip-media` now requires `--dry-run`.** Without Drive the hash
+  falls back to the Media text, so every hash differs and every failed row
+  re-opens with its attempts reset. Verified: the dry run reports "2 re-opened".
+- **`R2Store.exists` still raises on `AccessDenied`** rather than reporting
+  "missing" — confirmed, since silently re-uploading forever would hide a
+  broken token.
+
+### Confirmed sound under abuse
+
+Reordered columns · a deleted column · rows shorter than the header ·
+non-breaking spaces, smart quotes and emoji · corrupt `_State` rows ·
+header case/whitespace drift · 1×1 and 1×5000 images · CMYK, greyscale, LA,
+palette-with-transparency, animated GIF · zero-byte, truncated and
+HTML-pretending-to-be-JPEG files · 12000×12000 decompression-bomb shapes ·
+audio-only "video" · 2-second clips · 3000×100 aspect ratios · every one of
+the eight `PlatformState` values as a starting point for a due row · running
+the same publish twice · hash stability across repeated syncs.
