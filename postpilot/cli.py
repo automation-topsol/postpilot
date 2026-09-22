@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from postpilot import __version__
 from postpilot.config import ENV_PATH, REPO_ROOT, MissingSetting, Settings, write_default_config
+from postpilot.doctor import Level
+from postpilot.doctor import run as run_doctor
+from postpilot.drive import DriveClient
 from postpilot.logging import configure
+from postpilot.media.store import R2Store
+from postpilot.prepare import prepare as run_prepare
 from postpilot.sheets.client import SheetClient
 from postpilot.sheets.setup import initialise
 from postpilot.status import render
@@ -38,7 +44,7 @@ def _client(settings: Settings) -> SheetClient:
 
 
 def _fail(message: str) -> None:
-    console.print(f"[bold red]✘[/bold red] {message}")
+    console.print(f"[bold red]✘[/bold red] {escape(message)}")
     raise typer.Exit(code=1)
 
 
@@ -84,9 +90,9 @@ def sheet_init(
     if report.repaired:
         console.print(f"[green]✔[/green] verified: {', '.join(report.repaired)}")
     for note in report.notes:
-        console.print(f"[yellow]![/yellow] {note}")
+        console.print(f"[yellow]![/yellow] {escape(note)}")
     for problem in report.problems:
-        console.print(f"[red]✘[/red] {problem}")
+        console.print(f"[red]✘[/red] {escape(problem)}")
     if report.problems:
         raise typer.Exit(code=1)
 
@@ -95,6 +101,9 @@ def sheet_init(
 def sync(
     brand: str = typer.Option(None, "--brand", help="Only sync this brand."),
     dry_run: bool = typer.Option(False, "--dry-run", help="Compute everything, write nothing."),
+    skip_media: bool = typer.Option(
+        False, "--skip-media", help="Do not check Drive; hashes fall back to the Media text."
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Validate rows, assign IDs, compute hashes, reconcile `_State`."""
@@ -106,6 +115,7 @@ def sync(
             tz_name=settings.tunables.timezone,
             only_brand=brand,
             write=not dry_run,
+            drive=None if skip_media else DriveClient(settings.google_credentials),
         )
     except MissingSetting as exc:
         _fail(str(exc))
@@ -115,9 +125,9 @@ def sync(
         client.append_log(result.log_entries)
 
     for problem in result.problems:
-        console.print(f"[red]✘[/red] {problem}")
+        console.print(f"[red]✘[/red] {escape(problem)}")
     for warning in result.warnings:
-        console.print(f"[yellow]![/yellow] {warning}")
+        console.print(f"[yellow]![/yellow] {escape(warning)}")
 
     assigned = sum(b.assigned_ids for b in result.brands)
     reopened = sum(b.reopened for b in result.brands)
@@ -144,7 +154,13 @@ def status(
     try:
         client = _client(settings)
         # Read-only: status must never change what publish would do.
-        result = run_sync(client, tz_name=settings.tunables.timezone, only_brand=brand, write=False)
+        result = run_sync(
+            client,
+            tz_name=settings.tunables.timezone,
+            only_brand=brand,
+            write=False,
+            drive=DriveClient(settings.google_credentials),
+        )
     except MissingSetting as exc:
         _fail(str(exc))
         return
@@ -160,9 +176,53 @@ def _not_yet(command: str, phase: int) -> None:
 
 
 @app.command()
-def prepare(post: str = typer.Option(None, "--post")) -> None:
-    """Download, normalise and upload media for due posts. (Phase 2)"""
-    _not_yet("prepare", 2)
+def prepare(
+    post: str = typer.Option(None, "--post", help="Only this post ID; ignores the schedule."),
+    brand: str = typer.Option(None, "--brand", help="Only this brand."),
+    hours: int = typer.Option(None, "--hours", help="Look this far ahead (default: config.yaml)."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Report what would be uploaded, upload nothing."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Download, normalise and upload media for due and upcoming posts."""
+    settings = _settings(verbose)
+    try:
+        client = _client(settings)
+        drive = DriveClient(settings.google_credentials)
+        store = R2Store.from_settings(settings)
+        result = run_sync(
+            client, tz_name=settings.tunables.timezone, only_brand=brand, write=False, drive=drive
+        )
+        pairs = [(b.brand, p) for b in result.brands for p in b.posts]
+        prepared = run_prepare(
+            pairs,
+            drive,
+            store,
+            lookahead_hours=hours if hours is not None else settings.tunables.prepare_lookahead_hours,
+            only_post=post,
+            dry_run=dry_run,
+        )
+    except MissingSetting as exc:
+        _fail(str(exc))
+        return
+
+    for item in prepared.prepared:
+        marker = "[green]✔[/green]" if item.ok else "[red]✘[/red]"
+        console.print(f"{marker} {item.post_id} {item.platform.value}: "
+                      f"{item.uploaded} uploaded, {item.reused} reused")
+        for note in dict.fromkeys(item.notes):
+            console.print(f"    [dim]{escape(note)}[/dim]")
+        for error in item.errors:
+            console.print(f"    [red]{escape(error)}[/red]")
+
+    if not prepared.prepared:
+        console.print("[dim]Nothing due to prepare.[/dim]")
+    else:
+        console.print(
+            f"\n[bold]{prepared.uploaded} uploaded, {prepared.reused} reused[/bold]"
+            + (" [dim](dry run)[/dim]" if dry_run else "")
+        )
+    if prepared.failed:
+        raise typer.Exit(code=1)
 
 
 @app.command()
@@ -186,11 +246,30 @@ def summary() -> None:
 
 
 @app.command()
-def doctor() -> None:
-    """Check every credential and external dependency. (Phase 2)"""
-    console.print("[yellow]![/yellow] `doctor` arrives in Phase 2. See CLAUDE.md §6.")
-    console.print("[dim]Until then: uv run python spike/run_all.py[/dim]")
-    raise typer.Exit(code=2)
+def doctor(
+    offline: bool = typer.Option(False, "--offline", help="Only check local tooling."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Check every credential and external dependency."""
+    settings = _settings(verbose)
+    report = run_doctor(settings, skip_network=offline)
+
+    glyph = {Level.PASS: "[green]✔[/green]", Level.WARN: "[yellow]![/yellow]", Level.FAIL: "[red]✘[/red]"}
+    for finding in report.findings:
+        # escape(): a finding name like "Drive [grandinvitation]" is data, and
+        # rich would otherwise read the brackets as markup and swallow them.
+        name = escape(finding.name)
+        detail = escape(finding.detail)
+        console.print(f"{glyph[finding.level]} {name}" + (f" — {detail}" if detail else ""))
+        if finding.fix:
+            console.print(f"    [dim]fix: {escape(finding.fix)}[/dim]")
+
+    counts = report.counts()
+    console.print(
+        f"\n[bold]{counts[Level.PASS]} ok · {counts[Level.WARN]} warning(s) · {counts[Level.FAIL]} failure(s)[/bold]"
+    )
+    if report.failed:
+        raise typer.Exit(code=1)
 
 
 auth_app = typer.Typer(no_args_is_help=True, help="Guided token acquisition.")

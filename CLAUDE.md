@@ -250,7 +250,7 @@ differs from the original brief per §0.1.
 |---|---|---|
 | 0 | **API access spike** — FB + IG publish path, R2 public read (r2.dev), service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **COMPLETE — live post published to both platforms, see §10** |
 | 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | **COMPLETE — runs against the real Sheet; 79 tests green** |
-| 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | not started |
+| 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | **COMPLETE — 146 tests green; doctor 21 ok / 3 warn / 0 fail** |
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | not started |
 | 4 | Facebook adapter + reconciliation + one real image post | not started |
 | 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | not started |
@@ -469,8 +469,60 @@ exit with an explicit "arrives in Phase N" message rather than pretending.
   "published version differs from the Sheet" warning true on every later run
   rather than disappearing after one.
 
-**Still open for Phase 2:** `Post.content_hash()` currently hashes the raw
-Media cell text. Once Drive resolution exists it must hash **resolved file IDs
-+ md5s**, and `HASH_VERSION` in `apis.py` must be bumped `h1` -> `h2` in the
-same commit. Bumping it re-opens failed/invalid rows (harmless) and leaves
-published rows untouched (by design).
+**Carried into Phase 2 and now done:** `content_hash()` hashes resolved Drive
+file IDs + md5s, and `HASH_VERSION` was bumped `h1` -> `h2`.
+
+
+---
+
+## 12. Phase 2 findings (complete, 2026-09-23)
+
+**Built:** `postpilot/drive.py`, `postpilot/media/{policies,normalise,store}.py`,
+`postpilot/prepare.py`, `postpilot/doctor.py`. `prepare` and `doctor` are real
+commands now; `publish`, `summary` and `auth` remain phase-stubbed.
+
+**Verified against the real services:**
+
+| | |
+|---|---|
+| `doctor` | 21 ok · 3 warnings · **0 failures** (warnings are LinkedIn pending, Telegram unconfigured, and restocklypos' missing org URN — all expected) |
+| `prepare --dry-run` | reported both platform keys, uploaded nothing |
+| `prepare` | uploaded 2 objects (FB + IG) from one Drive PNG |
+| `prepare` (again) | **0 uploaded, 2 reused** — the HEAD-before-PUT path |
+| `sync` with Drive | caught `no file named 'second-image.png'` and marked the row `invalid` |
+
+**The hash now depends on Drive, not on typing.** `HASH_VERSION` is `h2`:
+`content_hash()` hashes resolved file IDs + md5s, so **renaming a file in Drive
+no longer re-opens a post, while replacing its bytes does**. That is the
+correct behaviour and was not achievable in Phase 1.
+
+### Design notes worth keeping
+
+- **Pad, don't crop** (beyond a 5% tolerance). Cropping silently removes part
+  of a design someone made deliberately — a wedding invitation with its date
+  cropped off is worse than one with soft blurred bars.
+- **Refuse, don't mangle.** Duration limits raise rather than trim: a
+  4-minute video is not a 90-second video with the end cut off. The message
+  lands in the teammate's `Error` column.
+- **Carousels take the *median* aspect**, clamped into range, so one odd image
+  cannot drag a whole set into heavy padding.
+- **Carousel keys are indexed.** Two identical files in one carousel share an
+  md5 and would otherwise collapse onto a single key, silently losing an item.
+- **A video canvas is sized from the source's LONG edge.** Using the edge that
+  matches the target orientation turns a 1920x1080 clip into a 608x1080
+  portrait canvas — technically 9:16, but postage-stamp sized. Caught in
+  testing, and now asserted.
+
+### Two bugs found by running it, not by reading it
+
+1. **ffmpeg input ordering.** The silent-audio input was declared after the
+   output options, so ffmpeg parsed it as an option *on the output* and failed
+   with a misleading message. Inputs must come first.
+2. **rich markup ate bracketed text again** — `Drive [grandinvitation]`
+   rendered as `Drive `. Same class of bug as in the spike. All
+   data-derived strings reaching the console now go through
+   `rich.markup.escape`, in `cli.py` and `status.py`.
+
+**Still open for Phase 3:** `prepare` is called by hand. The `publish` run
+algorithm must call it as step 5, after the lease is written, so that a crash
+during normalisation leaves a lease to expire rather than an unrecorded attempt.

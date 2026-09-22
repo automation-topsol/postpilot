@@ -6,6 +6,7 @@ import datetime as dt
 from zoneinfo import ZoneInfo
 
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from postpilot.models import Platform, PlatformState, RowStatus, StateRow
@@ -34,17 +35,17 @@ def render(result: SyncResult, *, tz_name: str, console: Console | None = None, 
     if result.problems:
         console.print("\n[bold red]Configuration problems[/bold red]")
         for problem in result.problems:
-            console.print(f"  • {problem}", style="red")
+            console.print(f"  • {escape(problem)}", style="red")
     if result.warnings:
         console.print("\n[bold yellow]Incomplete configuration[/bold yellow]")
         for warning in result.warnings:
-            console.print(f"  • {warning}", style="yellow")
+            console.print(f"  • {escape(warning)}", style="yellow")
 
     for brand_sync in result.brands:
         brand = brand_sync.brand
         platforms = ", ".join(p.value for p in brand.enabled_platforms) or "none"
         table = Table(
-            title=f"{brand.name}  ({brand.slug} · {platforms})",
+            title=escape(f"{brand.name}  ({brand.slug} · {platforms})"),
             title_justify="left",
             header_style="bold",
             expand=False,
@@ -76,12 +77,14 @@ def render(result: SyncResult, *, tz_name: str, console: Console | None = None, 
                 when += " (due)"
 
             table.add_row(
-                post.post_id or "—",
+                escape(post.post_id or "—"),
                 when,
                 post.post_type.value if post.post_type else "—",
                 ",".join(p.value for p in post.platforms) or "—",
                 f"[{STATUS_STYLE[status]}]{status.value}[/{STATUS_STYLE[status]}]",
-                _detail(post, states),
+                # Error text is data and routinely contains quoted file names
+                # and brackets; rich must not try to read it as markup.
+                escape(_detail(post, states)),
             )
 
         if len(posts) > limit:

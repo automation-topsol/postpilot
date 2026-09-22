@@ -27,8 +27,10 @@ LINKEDIN_RESTLI_VERSION = "2.0.0"
 # files are never silently reused. Part of every R2 key.
 POLICY_VERSION = "v1"
 
-# Bumped whenever the *content hash inputs* change. Phase 1 hashes the raw
-# Media cell text; Phase 2 replaces that with resolved Drive file IDs + md5s
-# and must bump this to h2. A hash change only ever re-validates a row — a
-# published platform is never republished, it only gets a Notes warning.
-HASH_VERSION = "h1"
+# Bumped whenever the *content hash inputs* change.
+#   h1 - Phase 1: hashed the raw Media cell text.
+#   h2 - Phase 2: hashes resolved Drive file IDs + md5s instead, so renaming a
+#        file in Drive no longer re-opens a post, while replacing its *bytes*
+#        does. Bumping re-opens failed/invalid rows (harmless) and leaves
+#        published rows untouched (by design).
+HASH_VERSION = "h2"

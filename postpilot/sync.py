@@ -15,14 +15,17 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 
+from postpilot.drive import DriveClient
 from postpilot.models import (
     Brand,
     LogEntry,
     Platform,
     PlatformState,
     Post,
+    PostType,
     RowStatus,
     StateRow,
+    ValidationIssue,
     roll_up_status,
 )
 from postpilot.sheets.client import SheetClient, Tab
@@ -95,8 +98,17 @@ def sync(
     now: dt.datetime | None = None,
     only_brand: str | None = None,
     write: bool = True,
+    drive: DriveClient | None = None,
 ) -> SyncResult:
-    """Read every tab once, compute, then write once per tab."""
+    """Read every tab once, compute, then write once per tab.
+
+    When `drive` is supplied, the Media column is resolved against the brand's
+    Drive folder. That does two things: it turns "no file named X" and
+    "ambiguous" into row errors the teammate can see and fix, and it makes the
+    content hash depend on the files' *identity and bytes* rather than on the
+    text someone typed. Without it, sync still works — validation is just
+    blind to whether the files exist.
+    """
     now = now or dt.datetime.now(dt.UTC)
     result = SyncResult()
 
@@ -126,7 +138,9 @@ def sync(
             result.problems.append(f"brand {brand.slug!r} has no tab — run `postpilot sheet init`")
             continue
 
-        brand_sync = _sync_brand(client, brand, tab, states, live_keys, tz_name, now, write=write)
+        brand_sync = _sync_brand(
+            client, brand, tab, states, live_keys, tz_name, now, write=write, drive=drive
+        )
         result.brands.append(brand_sync)
         result.log_entries.extend(_log_for(brand_sync, now))
 
@@ -152,6 +166,7 @@ def _sync_brand(
     now: dt.datetime,
     *,
     write: bool,
+    drive: DriveClient | None = None,
 ) -> BrandSync:
     out = BrandSync(brand=brand)
     writer = client.writer(tab)
@@ -181,9 +196,11 @@ def _sync_brand(
 
         out.posts.append(post)
 
+        fingerprint = _resolve_media(post, brand, drive)
+
         platform_states: list[StateRow] = []
         if not post.is_draft:
-            content_hash = post.content_hash()
+            content_hash = post.content_hash(fingerprint)
             for platform in post.platforms:
                 key = (post.post_id, platform)
                 live_keys.add(key)
@@ -206,6 +223,28 @@ def _sync_brand(
     if write:
         client.flush(writer)
     return out
+
+
+def _resolve_media(post: Post, brand: Brand, drive: DriveClient | None) -> str | None:
+    """Resolve the Media column, attaching any problems as row-level issues.
+
+    Returns the fingerprint for hashing, or None when Drive is unavailable (in
+    which case the raw Media text is hashed instead — see `Post.content_hash`).
+    """
+    if drive is None or post.is_draft or post.post_type is PostType.TEXT:
+        return None
+    if not post.media:
+        return ""
+    if not brand.drive_folder_id:
+        post.issues.append(
+            ValidationIssue(message=f"brand setting: {brand.name} has no Drive Folder ID in _Brands")
+        )
+        return None
+
+    resolution = drive.resolve(brand.drive_folder_id, post.media)
+    for error in resolution.errors:
+        post.issues.append(ValidationIssue(message=error))
+    return resolution.fingerprint if resolution.ok else None
 
 
 def _reconcile_platform(

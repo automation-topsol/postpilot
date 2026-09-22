@@ -371,3 +371,107 @@ of one bad row — a far worse outcome than treating that one (post, platform) a
 unknown-to-us and letting `sync` recreate it as `scheduled`. The lease and the
 hash protect against the duplicate-publish risk that recreation would otherwise
 carry.
+
+---
+
+## Phase 2 — Drive, media and R2
+
+### Padding beats cropping, and refusing beats trimming
+
+Two different failure modes, two different answers. For aspect ratios, the
+source is a design someone laid out deliberately, so cropping can silently
+remove the date, the venue or a logo; padding onto a blurred copy of the image
+keeps everything visible at the cost of some soft bars. Cropping is used only
+inside a 5% tolerance, where padding would waste more of the frame than
+trimming removes. For *duration*, there is no equivalent compromise: a
+four-minute video is not a ninety-second video with the end cut off, and
+silently truncating one would publish something nobody approved. So duration
+violations raise, with a message that reaches the teammate's `Error` column.
+
+### Carousels take the median aspect ratio, not the first item's
+
+Instagram requires every item in a carousel to share one ratio, so the ratio
+has to be decided for the set rather than per item. Taking the first item's
+would let whichever image happened to be typed first dictate the whole post —
+and if that one is a panorama, every other item gets heavily padded. The median
+is stable against a single outlier, which is the common case: four square
+images and one wide one should produce a square carousel.
+
+### Carousel keys carry an index
+
+The R2 key is derived from the source file's Drive md5. Two *identical* files
+in one carousel — which happens, deliberately, when someone repeats a frame —
+share an md5 and would collapse onto the same key, silently turning a five-item
+carousel into a four-item one. Appending the position makes each item
+addressable. Single-item posts keep the unindexed key so the common case stays
+readable.
+
+### A video canvas is sized from the source's long edge
+
+The obvious implementation sizes the output from whichever edge matches the
+target orientation: for a 9:16 target, take the source height. That turns a
+1920x1080 clip into a 608x1080 canvas — genuinely 9:16, above Facebook's
+540x960 minimum, and visibly terrible, because the actual picture is scaled
+down to 608 wide before the bars are added. Sizing from the source's long edge
+gives 1080x1920 and keeps the detail. Found by running the pipeline and reading
+the numbers, not by reading the code, which is why the test asserts the exact
+output dimensions rather than just the ratio.
+
+### ffmpeg inputs must be declared before output options
+
+The silent-audio track for videos with no sound is a second `-i` input. Placed
+after the encoding options, ffmpeg parses it as an option applied to the
+*output* file and fails with "you are trying to apply an input option to an
+output file or vice versa" — which reads like a filter problem and is not.
+Inputs first, then filters, then codecs, then the output path. Recorded because
+the error message actively misdirects.
+
+### `prepare` checks every key before downloading anything
+
+The HEAD-before-PUT check runs across *all* of a post's media first. If every
+object is already present the post is finished without downloading a single
+byte from Drive, which is the common case on re-runs and the reason the
+deterministic key exists at all. Only when something is missing does it fall
+through to downloading — and for carousels it downloads everything at that
+point anyway, because the shared aspect ratio cannot be computed without all
+the dimensions.
+
+### The content hash depends on Drive identity, not on typed text
+
+Phase 1 hashed the raw Media cell because Drive resolution did not exist yet.
+That had a real flaw: renaming a file in Drive changed nothing in the Sheet, so
+a post could silently point at different bytes with an unchanged hash — and
+conversely, tidying up a file name would re-open a post whose content had not
+changed. Hashing `{file_id}:{md5}` fixes both directions: identity plus content,
+never presentation. `HASH_VERSION` moved `h1` -> `h2` to make the change
+deliberate; the bump re-opens failed and invalid rows, which is harmless, and
+leaves published rows alone, which is the point.
+
+### Drive resolution errors are row errors, not crashes
+
+"No file named X", "ambiguous", "that is a Google Slides deck" and "no checksum"
+all surface as validation issues on the row, in the `Error` column, phrased for
+someone who has never seen a terminal. They arrive during `sync`, which means a
+typo in a file name is caught when the row is written rather than when the post
+is due. The alternative — discovering it at publish time — turns a typo into a
+missed post.
+
+### `doctor` warns for optional things and fails for required ones
+
+A missing Telegram bot must not make a healthy install look broken, and neither
+must a LinkedIn token while access is pending. Both warn. What fails is
+anything that would actually stop a publish: a short-lived Meta token, an
+unreadable Sheet, a Drive folder we cannot see, an R2 bucket the public cannot
+read. Every failure names the fix rather than the symptom — `AccessDenied` on a
+PUT reports "the R2 token is read-only", because the credentials are fine and
+sending someone to re-check them wastes an hour, as it did during Phase 0.
+
+### Escaping data before it reaches rich
+
+`Console.print` interprets `[...]` as markup, so a finding named
+`Drive [grandinvitation]` rendered as `Drive ` — the brand name vanished. The
+same bug appeared in the Phase 0 spike and was fixed there by disabling markup
+wholesale; here markup is genuinely wanted for colour, so every data-derived
+string is passed through `rich.markup.escape` instead. Error text is the worst
+offender because it routinely contains quoted file names and bracketed context.
+Diagnostic output that silently drops content is worse than no output.
