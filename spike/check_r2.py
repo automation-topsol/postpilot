@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from _common import Report, load_env, redact, require
+from _common import Report, env, load_env, redact, require
 
 # Written, read back, then deleted. Namespaced so it can never collide with
 # real media, which always lives under {brand}/{post_id}/...
@@ -162,13 +162,24 @@ def check_lifecycle(report: Report, s3, bucket: str) -> None:
             )
             return
         if code in {"AccessDenied", "AccessDeniedException", "403"}:
-            report.warn(
-                "lifecycle rule",
-                "cannot be read with this API token (bucket-level permission). "
-                f"Verify by hand in the Cloudflare dashboard that {bucket} expires "
-                f"objects after {LIFECYCLE_EXPECTED_DAYS} days — it is what keeps "
-                "R2 inside the free tier.",
-            )
+            # Reading lifecycle config needs bucket-level permission that an
+            # object-scoped token legitimately lacks. Once the operator has
+            # confirmed the rule by hand, record the date in
+            # R2_LIFECYCLE_CONFIRMED — a warning that fires every run for
+            # known-good state just teaches people to ignore warnings.
+            if confirmed := env("R2_LIFECYCLE_CONFIRMED"):
+                report.ok(
+                    "lifecycle rule",
+                    f"not readable with this token; confirmed by hand on {confirmed}",
+                )
+            else:
+                report.warn(
+                    "lifecycle rule",
+                    "cannot be read with this API token (bucket-level permission). "
+                    f"Verify by hand in the Cloudflare dashboard that {bucket} expires "
+                    f"objects after {LIFECYCLE_EXPECTED_DAYS} days — it is what keeps "
+                    "R2 inside the free tier. Then set R2_LIFECYCLE_CONFIRMED=<date>.",
+                )
             return
         raise
 

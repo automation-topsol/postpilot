@@ -329,24 +329,34 @@ Facebook, Instagram, Google and R2 is proven against the real accounts.
 | Telegram | SKIP by choice (§0.5) |
 | LinkedIn | not checked - access pending (§0.2) |
 
-### Confirmed platform IDs — these seed `_Brands`
+### The brand roster — confirmed, and it seeds `_Brands`
 
-| Page | Slug | Facebook Page ID | Instagram | Drive folder |
-|---|---|---|---|---|
-| Grand Invitation | `grandinvitation` | `1355072654348977` | `17841432916654917` (@grand.invitation) | `13M2wXeZlKX71PCsm3qLkPbIe5VbmALBi` |
-| A One Care | `aonecare` | `873552192507968` | `17841404568805350` (@aonecarepak) | *not supplied* |
-| TOPSOL | `topsol` | `108364721570952` | **none linked** | *not supplied* |
-| *(unknown)* | `restocklypos` | *no Page found* | — | `1LEf9Dqlm7GefhpzPRMI8HFR4hXbrqV-Z` |
+**Two brands are in scope.** A One Care and TOPSOL are Pages the token happens
+to administer but are **not** being onboarded; their tokens were removed from
+`.env` again. If either is ever added, one command regenerates it:
+`uv run python spike/meta_exchange_token.py --brand grandinvitation --write-env`.
 
-Two gaps to resolve before Phase 1 writes `_Brands`:
-- **`restocklypos` has a Drive folder but no Facebook Page** among the three
-  the token administers. Either its Page is under a different account, or the
-  brand is Drive-only for now. Its `Enabled Platforms` must reflect reality —
-  a brand listing a platform it has no credentials for produces `invalid` rows
-  forever.
-- **TOPSOL has no linked Instagram account.** Its `Enabled Platforms` must be
-  `FB` only. This is exactly the "not every brand has every platform" case the
-  brief calls for, and the first real test of per-platform validation.
+| Brand Name | Slug | Enabled Platforms | Facebook Page ID | Instagram User ID | LinkedIn Org URN | Drive Folder ID |
+|---|---|---|---|---|---|---|
+| Grand Invitation | `grandinvitation` | `FB, IG` | `1355072654348977` | `17841432916654917` | — | `13M2wXeZlKX71PCsm3qLkPbIe5VbmALBi` |
+| Restockly POS | `restocklypos` | `LI` | — | — | *pending* | `1LEf9Dqlm7GefhpzPRMI8HFR4hXbrqV-Z` |
+
+Two consequences worth stating plainly, because they shape Phases 1-6:
+
+- **`restocklypos` is LinkedIn-only, and LinkedIn access is pending.** So it
+  has no publishable platform until Phase 6. That is legitimate, not an error
+  state: its rows should validate, sit at `scheduled`, and simply never be
+  selected for publishing — *not* be marked `invalid`. Phase 1 must therefore
+  distinguish "this brand has no enabled platform I can publish to yet" from
+  "this row is malformed", and Phase 3's dry-run should show its rows waiting
+  rather than failing. Its org URN goes into `_Brands` when access lands.
+- **`grandinvitation` is the only brand exercisable end to end right now**, so
+  it is the test brand for Phases 1-5. Every real publish test runs against it.
+
+This pairing is actually a good draw: one brand with two platforms and one with
+a platform we cannot reach yet is precisely the "not every brand has every
+platform" shape the brief calls for, and it exercises per-platform validation
+from Phase 1 rather than leaving it untested until late.
 
 ### What Phase 0 resolved along the way
 
@@ -363,10 +373,13 @@ Two gaps to resolve before Phase 1 writes `_Brands`:
 
 ### Still outstanding
 
-1. **Confirm the 60-day R2 lifecycle rule by hand** — unreadable with an
-   object-scoped token, and it is what keeps R2 in the free tier.
-2. **Drive folders are empty** — drop one image into each so `prepare` has
-   something real to normalise in Phase 2, and so `md5Checksum` is confirmed.
-3. **No live test post has been made.** Read-only checks prove access, not the
-   publish path. One real image post per platform is the honest end of Phase 0,
-   and it needs an explicit go-ahead: v1 cannot delete a published post.
+1. **Drive folders are empty** — drop an image into
+   `13M2wXeZlKX71PCsm3qLkPbIe5VbmALBi` so `md5Checksum` is confirmed and
+   Phase 2 has something real to normalise.
+2. **No live test post has been made.** Read-only checks prove access, not the
+   publish path. One real image post is the honest end of Phase 0 and needs an
+   explicit go-ahead: v1 cannot delete a published post.
+
+Resolved: the 60-day R2 lifecycle rule was **confirmed by hand on 2026-09-23**
+and recorded in `R2_LIFECYCLE_CONFIRMED`, so the check now reports it as
+confirmed instead of warning on every run.
