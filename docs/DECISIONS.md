@@ -693,3 +693,55 @@ empty string would lock the operator out at the next expiry, with no way back
 except a full browser round trip — and they would only discover it sixty days
 later, when the scheduler quietly stopped. Carrying the old value forward is one
 line and removes the whole failure mode.
+
+---
+
+## Phase 7 — automation
+
+### The digest falls back to `_Log` rather than being skipped
+
+Telegram is optional, and the naive reading of "optional" is "skip it when it is
+missing". That is wrong here, because the digest is the only routine evidence
+that the scheduler is still running. Skipping it means the silence that follows
+a dead cron looks exactly like the silence that follows a quiet week. Writing
+the same text to `_Log` costs one batched append, puts it where the teammate
+already looks, and keeps the signal honest. For the same reason `send()` never
+raises: a notifier that crashes the run converts a reporting problem into a
+delivery problem, which is strictly worse than the thing it was reporting.
+
+### `cancel-in-progress: false`
+
+GitHub's default for a concurrency group is to cancel the older run, which is
+right for CI and wrong here. The window between a platform returning 2xx and our
+`_State` write is the single most dangerous moment in the system — a run
+cancelled there leaves a published post recorded as `publishing`, and although
+the lease and reconciliation would eventually settle it, deliberately creating
+that situation on every overlap is indefensible. A second run queueing behind
+the first costs nothing, because the second will find the rows leased and skip
+them.
+
+### The cron is staggered off the hour
+
+`7,22,37,52` rather than `0,15,30,45`. GitHub's scheduled-workflow queue is
+heavily loaded on the hour and runs are routinely delayed by several minutes
+there. The promised SLA is 15-30 minutes end to end, which leaves no room to
+donate five of them to queueing. The launchd script uses the same minutes, so
+switching between the two changes nothing about when posts go out.
+
+### The failure artifact is safe because redaction happens at the source
+
+Uploading a run log on failure is only acceptable if the log cannot contain a
+token, and the way to guarantee that is to redact in the logging formatter
+rather than when the artifact is assembled. Every line has already been through
+`postpilot.logging.redact` and the env-value sweep before it reaches stdout, so
+`tee run.log` captures redacted text and there is no second place for the rule
+to be forgotten.
+
+### Adding a brand touches three places, and the docs say so
+
+A new brand needs a `_Brands` row, a `META_PAGE_TOKEN_<SLUG>` repository
+secret, and that same variable added to the `env:` block of both workflows.
+GitHub Actions cannot enumerate secrets — each one must be named in the
+workflow — so this cannot be automated away. The honest response is to document
+it prominently rather than to let someone discover it when a new brand silently
+publishes nothing.

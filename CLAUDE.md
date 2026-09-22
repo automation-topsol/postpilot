@@ -255,7 +255,7 @@ differs from the original brief per §0.1.
 | 4 | Facebook adapter + reconciliation + one real image post | **COMPLETE — adapter + reconciliation live-verified; live post deferred to the operator** |
 | 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | **COMPLETE — reconciliation live-verified read-only** |
 | 6 | LinkedIn adapter + `auth linkedin` + token refresh | **written, UNVERIFIED — still blocked on API access** |
-| 7 | Automation: workflows, summary (Telegram **or** `_Log` fallback, §0.5), launchd script, docs polish | not started |
+| 7 | Automation: workflows, summary (Telegram **or** `_Log` fallback, §0.5), launchd script, docs polish | **COMPLETE** |
 
 **Stop at the end of each phase and show the operator what works before
 continuing.** Keep this table's "State" column current — it is how the next
@@ -739,3 +739,47 @@ of this has touched the real API**. Three things keep that honest:
 
 `restocklypos` is LinkedIn-only, so it publishes nothing until this is verified
 and its org URN is filled into `_Brands`.
+
+
+---
+
+## 17. Phase 7 findings (complete, 2026-09-23)
+
+**Built:** `postpilot/summary.py`, three workflows, the launchd installer,
+docs polish. 288 tests.
+
+### The digest is never silently skipped
+
+It is the only routine signal that the scheduler is alive, so "Telegram is not
+set up" must not mean "no digest". When Telegram is unconfigured *or refuses*,
+the same text goes to the `_Log` tab — durable, timestamped, and in the place
+the teammate already looks. `send()` never raises: a notifier that crashes the
+run would turn a reporting problem into a delivery problem.
+
+### Workflow decisions
+
+- **`concurrency: cancel-in-progress: false`.** Cancelling a run between an
+  API's 2xx and our `_State` write is *exactly* how a post gets published
+  twice. A queued second run is fine; a cancelled first one is not.
+- **The cron is staggered off the hour** (`7,22,37,52`). GitHub's scheduler is
+  busiest at `:00` and delays runs there, and the 15-30 minute SLA has no room
+  for that.
+- **`keepalive.yml` exists because GitHub disables scheduled workflows after
+  60 days of repository inactivity, silently.** A scheduler that quietly stops
+  scheduling is this project's worst failure.
+- **The failure artifact is safe to keep** because redaction happens in
+  `postpilot.logging` before anything is printed, not at upload time.
+
+### Adding a brand touches three places
+
+A new brand needs a `_Brands` row, a `META_PAGE_TOKEN_<SLUG>` secret, **and**
+the same line added to the `env:` block of both workflows. Actions cannot
+enumerate secrets, so each one must be named. This is the one piece of manual
+wiring the design does not remove, and it is called out in the README.
+
+### launchd is an alternative, not an addition
+
+`scripts/install-local-launchd.sh` uses the same stagger, and prints a loud
+instruction to disable the Actions cron. Two schedulers is the situation the
+lease *survives*, which is not the same as wanting it: each run duplicates
+work, and every ambiguous result costs a human a look at the platform.

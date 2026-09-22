@@ -338,9 +338,46 @@ def _brand_creds(settings: Settings, client) -> dict[str, BrandCreds]:
 
 
 @app.command()
-def summary() -> None:
-    """Send the daily digest to Telegram, or to `_Log` if unconfigured. (Phase 7)"""
-    _not_yet("summary", 7)
+def summary(
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+    to_log: bool = typer.Option(False, "--to-log", help="Skip Telegram and write to _Log."),
+) -> None:
+    """Send the daily digest to Telegram, or write it to `_Log` if that fails.
+
+    The digest is the only routine signal that the scheduler is alive, so it is
+    never silently skipped: if Telegram is unconfigured or refuses, the same
+    text goes to the `_Log` tab instead.
+    """
+    from postpilot.summary import build_digest, render_text, send, to_log_entries
+
+    settings = _settings(verbose)
+    try:
+        client = _client(settings)
+        result = run_sync(
+            client,
+            tz_name=settings.tunables.timezone,
+            write=False,
+            drive=DriveClient(settings.google_credentials),
+        )
+    except MissingSetting as exc:
+        _fail(str(exc))
+        return
+
+    digest = build_digest(result, settings)
+    text = render_text(digest, settings.tunables.timezone)
+    console.print(escape(text))
+
+    delivered, detail = (False, "skipped by --to-log") if to_log else send(
+        digest, settings, tz_name=settings.tunables.timezone
+    )
+
+    if delivered:
+        console.print(f"\n[green]✔[/green] {escape(detail)}")
+        return
+
+    reason = "unconfigured" if not settings.has_telegram else "fallback"
+    client.append_log(to_log_entries(digest, settings.tunables.timezone, reason=reason))
+    console.print(f"\n[yellow]![/yellow] {escape(detail)} — written to the _Log tab instead")
 
 
 @app.command()

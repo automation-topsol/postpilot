@@ -12,9 +12,11 @@ No server, no database, no web UI. A CLI, a Sheet, and a scheduled workflow.
 > automatically published again. If a remote API result is ambiguous, PostPilot
 > stops and asks a human instead of retrying.
 
-**Status: Phase 0 (access spike).** See `CLAUDE.md` §6 for the phase plan.
-LinkedIn is deferred until API access is approved; Facebook and Instagram
-come first.
+**Status: complete through Phase 7.** Facebook and Instagram are built,
+tested and verified against the live APIs. LinkedIn is written but
+**unverified** — Community Management API access is still pending, so the
+adapter is only registered once `LINKEDIN_ACCESS_TOKEN` exists. See
+`CLAUDE.md` §6 for the phase table.
 
 ---
 
@@ -25,7 +27,7 @@ come first.
 | `CLAUDE.md` | the design contract — read this first |
 | `docs/MEDIA_POLICIES.md` | verified per-platform media limits + pinned API versions |
 | `docs/DECISIONS.md` | why each design decision was made |
-| `docs/HOW_TO_ADD_A_POST.md` | the non-technical teammate's guide *(Phase 1)* |
+| `docs/HOW_TO_ADD_A_POST.md` | the non-technical teammate's guide — send them this |
 | `CLAUDE_CODE_PROMPT.md` | the original full brief |
 
 ---
@@ -111,13 +113,45 @@ wherever the summary should land → `TELEGRAM_CHAT_ID`. One digest a day at
 ### 6. Verify, then go
 
 ```bash
-uv run python spike/run_all.py        # Phase 0 access spike
-postpilot doctor                      # full environment check (Phase 2)
-postpilot sheet init                  # create/repair the Sheet tabs (Phase 1)
+uv run postpilot doctor               # checks every credential end to end
+uv run postpilot sheet init           # create/repair the Sheet tabs
+uv run postpilot sync                 # validate rows, assign IDs
+uv run postpilot status               # see what it made of them
 ```
 
-Finally, push the repo and add every value in `.env` as a **GitHub Actions
-repository secret**, one secret per value.
+`doctor` is the one that matters: it fails on anything that would stop a
+publish and warns on anything optional. Zero failures means you are ready.
+
+### 7. GitHub Actions
+
+Push the repo, then add **every value in `.env` as a repository secret**, one
+secret per value (Settings → Secrets and variables → Actions):
+
+```
+GOOGLE_SERVICE_ACCOUNT_JSON   SHEET_ID
+R2_ACCOUNT_ID   R2_ACCESS_KEY_ID   R2_SECRET_ACCESS_KEY
+R2_BUCKET       R2_PUBLIC_BASE_URL
+META_APP_ID     META_APP_SECRET     META_PAGE_TOKEN_<SLUG>   (one per brand)
+LINKEDIN_ACCESS_TOKEN   LINKEDIN_REFRESH_TOKEN   LINKEDIN_TOKEN_EXPIRES
+TELEGRAM_BOT_TOKEN      TELEGRAM_CHAT_ID         (both optional)
+```
+
+Adding a brand means adding its `META_PAGE_TOKEN_<SLUG>` secret **and** adding
+the same line to the `env:` block of `publish.yml` and `summary.yml` — Actions
+cannot enumerate secrets, so each one has to be named.
+
+Three workflows are included:
+
+| workflow | when | what |
+|---|---|---|
+| `publish.yml` | `7,22,37,52 * * * *` | the only routine live publisher |
+| `summary.yml` | `0 4 * * *` (09:00 PKT) | the daily digest |
+| `keepalive.yml` | monthly | an empty commit, so GitHub does not silently disable the schedules after 60 days of inactivity |
+
+If the repo is **private**, each run bills about a minute: roughly 2,900
+minutes a month at a 15-minute cadence, against 2,000 free. Either keep it
+public (the repo holds only code and docs) or halve the cadence to
+`7,37 * * * *` for ~1,450 minutes.
 
 ---
 
@@ -126,9 +160,13 @@ repository secret**, one secret per value.
 ```bash
 postpilot sync                        # validate rows, assign IDs, write _State
 postpilot status                      # what is upcoming / failed / needs review
-postpilot publish --dry-run           # full pipeline, prints every API call, sends nothing
+postpilot prepare                     # download, normalise and upload media
+postpilot publish --dry-run           # full pipeline, sends nothing, writes no lease
 postpilot publish --live --confirm    # local live publish — both flags required
-postpilot summary                     # send the Telegram digest
+postpilot summary                     # digest to Telegram, or to _Log
+postpilot doctor                      # check every credential
+postpilot auth meta --brand <slug>    # mint a long-lived Page token
+postpilot auth linkedin [--refresh]   # one token for every Company Page
 ```
 
 GitHub Actions is the only routine live publisher; the cron runs at
