@@ -290,3 +290,84 @@ reuse is the behaviour that keeps R2 inside the free tier. It also means a dry
 run surfaces media problems (wrong aspect, oversized, unfetchable URL) at the
 time someone is actually looking at the output. The objects are addressed by
 content hash and expire on their own, so an unused upload costs nothing.
+
+---
+
+## Phase 1 — models and the Sheet
+
+### `_State` is rewritten wholesale, brand tabs are patched in place
+
+Two different tabs, two different write strategies. `_State` is machine-owned
+and no human edits it, so rewriting it entirely in one `update` is simplest and
+cannot drift. Brand tabs are the opposite: a human may be typing in one while
+the run is happening, so only the six tool-owned columns are touched, as a
+single contiguous `M:R` range per row. That is one write per row rather than
+six, which is what keeps the run inside the Sheets quota — the test
+`test_tool_columns_are_written_as_one_contiguous_range` exists to stop anyone
+"simplifying" it back into per-cell writes.
+
+### Post IDs carry a brand prefix, and prefix collisions are a hard error
+
+`gi-0042` is more useful than `0042` the moment two brands appear in `_Log`
+together. The prefix comes from the brand name's initials, which is stable and
+human-recognisable. The risk is two brands deriving the same prefix — "Grand
+Invitation" and "Global Imports" both give `gi` — which would silently merge
+their ID sequences and, worse, their `_State` rows. `parse_brands` therefore
+detects prefix collisions at load time and reports them as a problem rather
+than letting the ambiguity through.
+
+### Config problems and incomplete configuration are separated
+
+`restocklypos` is LinkedIn-only while LinkedIn access is pending, so it
+legitimately has an enabled platform with no org URN. Treating that as an error
+would make every single run of a correctly-configured Sheet exit non-zero,
+which trains people to ignore the exit code. It is now a *warning*: reported
+every run, never fatal. Structural faults — duplicate slugs, malformed slugs,
+colliding prefixes — remain *problems* and do fail the command.
+
+### But a row that cannot publish is still marked `invalid`
+
+The counterpart to the above, and a correction to an earlier note in CLAUDE.md.
+When a platform has no target ID, rows targeting it are `invalid`, not
+`scheduled`. A row that can never publish must not claim to be waiting — that
+would hide the gap behind a reassuring status. What the earlier note was right
+about is the *risk*: the teammate must not be sent to fix a row that is already
+correct. That is solved in the message, which says "brand setting: … (nothing
+wrong with this row)", not by mislabelling the state.
+
+### Sheet protection is warn-only
+
+The Sheets API enforces hard protection through an editor allow-list. Getting
+that list wrong with a service account is a real way to lock the Sheet's human
+owner out of columns on their own document, and unpicking it needs the API
+again. The actual risk being managed is an accidental paste or drag-fill into
+the tool-owned columns, and a warning dialog stops that just as well. The
+gentler control has a far better worst case.
+
+### Ambiguous dates are read day-first and say so
+
+`03/04/2026` is 3 April in Pakistan and 4 March in the US, and the Sheet's
+display string depends on the viewer's locale, so the tool cannot know which
+was meant. Rejecting it outright would block legitimate use; guessing silently
+could publish a wedding invitation a month early. So it guesses — day-first,
+matching the operator's locale — and writes what it assumed into the row's
+`Notes`, turning a silent assumption into a visible one. `YYYY-MM-DD` is
+unambiguous and is what the non-technical guide tells people to use.
+
+### Sync is deliberately read-mostly and never publishes
+
+`sync` validates, assigns IDs and reconciles `_State`, but never calls a
+publishing API and never writes a lease. That separation is what lets `status`
+reuse it verbatim with `write=False` to show the truth without changing it, and
+what makes the whole validation layer testable against a fake client with no
+network at all. `publish` in Phase 3 consumes what `sync` produces rather than
+recomputing it.
+
+### `parse_state` drops corrupt rows instead of raising
+
+`_State` is machine-written, so a malformed row means corruption rather than
+user error. Aborting the run would leave every *other* post unpublished because
+of one bad row — a far worse outcome than treating that one (post, platform) as
+unknown-to-us and letting `sync` recreate it as `scheduled`. The lease and the
+hash protect against the duplicate-publish risk that recreation would otherwise
+carry.

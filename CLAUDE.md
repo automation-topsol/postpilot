@@ -249,7 +249,7 @@ differs from the original brief per §0.1.
 | # | Phase | State |
 |---|---|---|
 | 0 | **API access spike** — FB + IG publish path, R2 public read (r2.dev), service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **COMPLETE — live post published to both platforms, see §10** |
-| 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | not started |
+| 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | **COMPLETE — runs against the real Sheet; 79 tests green** |
 | 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | not started |
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | not started |
 | 4 | Facebook adapter + reconciliation + one real image post | not started |
@@ -344,12 +344,20 @@ to administer but are **not** being onboarded; their tokens were removed from
 Two consequences worth stating plainly, because they shape Phases 1-6:
 
 - **`restocklypos` is LinkedIn-only, and LinkedIn access is pending.** So it
-  has no publishable platform until Phase 6. That is legitimate, not an error
-  state: its rows should validate, sit at `scheduled`, and simply never be
-  selected for publishing — *not* be marked `invalid`. Phase 1 must therefore
-  distinguish "this brand has no enabled platform I can publish to yet" from
-  "this row is malformed", and Phase 3's dry-run should show its rows waiting
-  rather than failing. Its org URN goes into `_Brands` when access lands.
+  has no publishable platform until Phase 6. Phase 1 resolved how to represent
+  that, and the answer is a **three-way** distinction, not the two-way one
+  originally sketched here:
+  - a *problem* is structurally wrong and must be fixed (duplicate slug,
+    colliding ID prefix) — these fail the command;
+  - a *warning* is a known-incomplete configuration the tool handles correctly
+    (LinkedIn enabled before its URN exists) — reported, never fatal;
+  - a row whose platform has no target ID is marked `invalid` with an error
+    that says explicitly *"brand setting … (nothing wrong with this row)"*, so
+    the teammate is not sent to fix a row that is already correct.
+
+  Marking such rows `scheduled` was the original plan and is wrong: a row that
+  can never publish must not claim it is waiting to. Its org URN goes into
+  `_Brands` when access lands, and every affected row re-opens automatically.
 - **`grandinvitation` is the only brand exercisable end to end right now**, so
   it is the test brand for Phases 1-5. Every real publish test runs against it.
 
@@ -420,3 +428,49 @@ The test posts are live on both platforms and **the tool cannot delete them** -
 v1 has no deletion. They must be removed by hand from the Page and the IG
 account. The R2 objects under `grandinvitation/spike-0001/` expire themselves
 via the 60-day lifecycle rule.
+
+
+---
+
+## 11. Phase 1 findings (complete, 2026-09-23)
+
+Runs against the real Sheet (`PostPilot Content Calendar`). 79 tests green,
+none touching a real API or Google.
+
+**Built:** `postpilot/{apis,config,models,logging,sync,status,cli}.py` and
+`postpilot/sheets/{schema,client,parse,state,setup}.py`. `init`, `sheet init`,
+`sync` and `status` work; `prepare`, `publish`, `summary`, `doctor` and `auth`
+exit with an explicit "arrives in Phase N" message rather than pretending.
+
+**Verified end to end on the real Sheet:**
+
+| | |
+|---|---|
+| `sheet init` | created `grandinvitation` and `restocklypos` tabs, applied 20 structural changes (freeze, bold, dropdowns, warn-only protection, hid `_State`) |
+| `sync` | assigned `gi-0001`…`gi-0003`, wrote 6 ranges, rewrote `_State` (6 rows), appended `_Log` |
+| idempotency | second `sync` assigned 0 new IDs and changed nothing |
+| self-healing | fixing a 1-file carousel re-opened **both** its platforms `invalid -> scheduled` with no human intervention |
+| per-platform validation | a `text` row on `FB, IG` shows `scheduled` with `IG: Instagram cannot post without media` — Facebook is unaffected |
+
+**Decisions made during the phase** (full reasoning in `docs/DECISIONS.md`):
+
+- **Post IDs** are `{prefix}-{NNNN}` with the prefix derived from the brand
+  name's initials (`Grand Invitation` -> `gi`). Prefix collisions across brands
+  are detected at load and reported, because colliding IDs would silently
+  merge two brands' state.
+- **Protection is `warningOnly`.** Hard protection is enforced by editor list,
+  and getting that wrong with a service account can lock the Sheet's owner out
+  of their own columns. The risk being managed is an accidental paste, which a
+  warning already prevents.
+- **Ambiguous dates warn instead of guessing silently.** `03/04/2026` is read
+  day-first (Pakistan convention) *and* leaves a note in `Notes` saying so.
+  `YYYY-MM-DD` is what the guide tells people to use.
+- **A published row's content hash is never updated.** That is what keeps the
+  "published version differs from the Sheet" warning true on every later run
+  rather than disappearing after one.
+
+**Still open for Phase 2:** `Post.content_hash()` currently hashes the raw
+Media cell text. Once Drive resolution exists it must hash **resolved file IDs
++ md5s**, and `HASH_VERSION` in `apis.py` must be bumped `h1` -> `h2` in the
+same commit. Bumping it re-opens failed/invalid rows (harmless) and leaves
+published rows untouched (by design).
