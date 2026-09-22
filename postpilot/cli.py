@@ -18,6 +18,9 @@ from postpilot.drive import DriveClient
 from postpilot.logging import configure
 from postpilot.media.store import R2Store
 from postpilot.prepare import prepare as run_prepare
+from postpilot.publish import publish as run_publish
+from postpilot.publishers.base import BrandCreds, PublishStatus
+from postpilot.publishers.registry import available_publishers
 from postpilot.sheets.client import SheetClient
 from postpilot.sheets.setup import initialise
 from postpilot.status import render
@@ -227,16 +230,111 @@ def prepare(
 
 @app.command()
 def publish(
-    dry_run: bool = typer.Option(False, "--dry-run"),
-    live: bool = typer.Option(False, "--live"),
-    confirm: bool = typer.Option(False, "--confirm"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Run the whole pipeline, send nothing."),
+    live: bool = typer.Option(False, "--live", help="Actually publish. Requires --confirm."),
+    confirm: bool = typer.Option(False, "--confirm", help="Second half of the live-run safety gate."),
     brand: str = typer.Option(None, "--brand"),
     post: str = typer.Option(None, "--post"),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Publish due posts. Local live runs require --live AND --confirm. (Phase 3)"""
+    """Publish everything that is due.
+
+    Local live runs need BOTH --live and --confirm: GitHub Actions is meant to
+    be the only routine publisher, and two schedulers racing is exactly what
+    the lease exists to survive rather than something to invite.
+    """
     if live and not confirm:
         _fail("--live also requires --confirm. Nothing was sent.")
-    _not_yet("publish", 3)
+    if not live and not dry_run:
+        _fail("pass --dry-run to rehearse, or --live --confirm to publish for real.")
+
+    settings = _settings(verbose)
+    try:
+        client = _client(settings)
+        drive = DriveClient(settings.google_credentials)
+        store = R2Store.from_settings(settings)
+        publishers = available_publishers()
+        creds = _brand_creds(settings, client)
+
+        result = run_publish(
+            client,
+            drive,
+            store,
+            publishers,
+            creds,
+            tz_name=settings.tunables.timezone,
+            lease_minutes=settings.tunables.lease_minutes,
+            max_attempts=settings.tunables.max_attempts,
+            backoff_base=settings.tunables.backoff_base_seconds,
+            reconcile_window=settings.tunables.reconcile_window_minutes,
+            only_brand=brand,
+            only_post=post,
+            dry_run=not live,
+        )
+    except MissingSetting as exc:
+        _fail(str(exc))
+        return
+
+    if not publishers:
+        console.print("[yellow]![/yellow] no platform adapters are built yet (Facebook lands in Phase 4)")
+
+    for item in result.actions_applied:
+        console.print(f"[cyan]→[/cyan] action {escape(item)}")
+    if result.reconciled:
+        for post_id, platform in result.reconciled.resolved_published:
+            console.print(f"[green]✔[/green] reconciled {escape(post_id)} {platform.value}: already published")
+        for post_id, platform in result.reconciled.returned_to_scheduled:
+            console.print(f"[yellow]↻[/yellow] reconciled {escape(post_id)} {platform.value}: not found, rescheduled")
+        for post_id, platform in result.reconciled.still_unknown:
+            console.print(f"[magenta]?[/magenta] {escape(post_id)} {platform.value}: needs a human")
+    for item in result.leases_skipped:
+        console.print(f"[dim]… {escape(item)} is leased by another run — skipped[/dim]")
+    for item in result.leases_expired:
+        console.print(f"[yellow]![/yellow] {escape(item)}: a previous run did not finish")
+
+    glyph = {
+        PublishStatus.SUCCESS: "[green]✔[/green]",
+        PublishStatus.PERMANENT_FAILURE: "[red]✘[/red]",
+        PublishStatus.RETRYABLE_FAILURE: "[yellow]↻[/yellow]",
+        PublishStatus.UNKNOWN: "[magenta]?[/magenta]",
+    }
+    for attempt in result.attempts:
+        mark = "[dim]·[/dim]" if attempt.dry_run else glyph[attempt.status]
+        console.print(
+            f"{mark} {escape(attempt.post_id)} {attempt.platform.value}: "
+            f"{escape(attempt.detail or (attempt.status.value if attempt.status else ''))}"
+        )
+
+    if not result.attempts:
+        console.print("[dim]Nothing is due.[/dim]")
+    else:
+        console.print(
+            f"\n[bold]{result.published} published[/bold]"
+            + (" [dim](dry run — nothing was sent)[/dim]" if not live else "")
+        )
+    if any(a.status is PublishStatus.PERMANENT_FAILURE for a in result.attempts):
+        raise typer.Exit(code=1)
+
+
+def _brand_creds(settings: Settings, client) -> dict[str, BrandCreds]:
+    """Credentials per brand. A brand with no token simply gets none — the
+    run algorithm turns that into a clear permanent failure, not a crash."""
+    from postpilot.sheets.parse import parse_brands
+    from postpilot.sheets.schema import BRANDS_TAB
+
+    tab = client.read(BRANDS_TAB)
+    if tab is None:
+        return {}
+    brands, _, _ = parse_brands(tab.headers, tab.rows)
+
+    out: dict[str, BrandCreds] = {}
+    for item in brands:
+        out[item.slug] = BrandCreds(
+            brand=item,
+            meta_page_token=settings.meta_page_token(item.slug) if settings.has_meta_token(item.slug) else "",
+            linkedin_access_token=settings.linkedin_access_token if settings.has_linkedin else "",
+        )
+    return out
 
 
 @app.command()

@@ -475,3 +475,82 @@ wholesale; here markup is genuinely wanted for colour, so every data-derived
 string is passed through `rich.markup.escape` instead. Error text is the worst
 offender because it routinely contains quoted file names and bracketed context.
 Diagnostic output that silently drops content is worse than no output.
+
+---
+
+## Phase 3 — the state machine
+
+### Leases expire before reconciliation runs, not during selection
+
+The first implementation expired stale leases while selecting what was due,
+which is step 5 — but reconciliation is step 4. A run that died holding a lease
+therefore became `unknown` only *after* the reconciler had already walked past,
+so it sat untouched until the run after next. Moving expiry to its own step,
+ahead of reconciliation, means a crashed run is settled on the very next run.
+Found by a failing test rather than by reading the code, which is the whole
+reason the failure-injection suite exists.
+
+### Each row is leased immediately before its own API call
+
+Leasing every due row in one batch up front is cheaper — one `_State` write per
+run instead of one per row — and it is what the first version did. The problem
+shows up when a run dies partway through: every row it never reached is sitting
+`publishing`, and each one then needs a 20-minute lease expiry plus a
+reconciliation lookup to establish that nothing happened. Leasing per row means
+an unattempted row is simply still `scheduled`, needing nothing. At 20-50 posts
+a week the extra writes are irrelevant; the cleaner failure semantics are not.
+
+### A negative lookup is evidence; a failed lookup is not
+
+This is the distinction the whole reconciler turns on, and it is what lets
+`unknown` ever resolve to anything other than "ask a human". If `find_recent`
+returns successfully and our post is not in it, the post is not there — so
+rescheduling cannot duplicate anything. If `find_recent` raises, we have
+learned nothing at all, and the state stays `unknown`. The guarantee says
+PostPilot stops when a result is *ambiguous*; a successful negative result is
+not ambiguous, and treating it as such would strand every post that ever hit a
+timeout.
+
+### Matching needs caption and time together
+
+Caption alone would match a post from last month with the same words — brands
+do repeat copy. Time alone would match whatever else happened to go out in the
+same half hour. Requiring both, with a ±30 minute window around the recorded
+attempt, is tight enough to be trustworthy and loose enough to survive the
+platforms reformatting captions, which they do (whitespace, trailing hashtags).
+Comparison is on a normalised 60-character prefix for the same reason.
+
+### When the Sheet fails mid-run, the lease is the recovery
+
+There is a real temptation to catch the write failure and mark the row
+`unknown` — except the thing that just failed is the only place we could write
+that. So the run is allowed to die. What saves it is the ordering: the lease
+was written *before* the API call, so `_State` already says `publishing`, and
+that row ages into `unknown` and gets reconciled next run. This is the single
+clearest argument for writing the lease first, and two tests now assert the
+full journey rather than just the first half.
+
+### An adapter that raises is `unknown`, never a retry
+
+Adapters return a classified `PublishResult` rather than raising. If one raises
+anyway — a bug, a library changing its exception type — the runner cannot know
+whether the request went out. `UNKNOWN` is the only safe reading: being wrong
+that way costs a human a glance, while the alternative publishes twice and v1
+cannot delete a post.
+
+### Media failures are permanent rather than retryable
+
+A missing Drive file, an ambiguous name, a video over the duration limit: none
+of these get better by waiting, and all of them need a person. Classifying them
+as retryable would burn all three attempts over an hour and then fail anyway,
+with the teammate seeing nothing useful until the end. Permanent puts the real
+message in the `Error` column immediately, and fixing the row re-opens it
+automatically via the content hash.
+
+### `--dry-run` runs everything except the lease
+
+It syncs, resolves Drive, normalises media, uploads to R2 and works out exactly
+what each API call would carry — then stops. Because no lease is written, a dry
+run is safe to execute at any moment, including while the real scheduler is
+running, and it cannot affect what the next real run does. Verified against the
+live Sheet: after a dry run, `_State` still read `attempts=0, attempt_id=""`.

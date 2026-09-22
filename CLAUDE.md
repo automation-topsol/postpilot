@@ -251,7 +251,7 @@ differs from the original brief per §0.1.
 | 0 | **API access spike** — FB + IG publish path, R2 public read (r2.dev), service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **COMPLETE — live post published to both platforms, see §10** |
 | 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | **COMPLETE — runs against the real Sheet; 79 tests green** |
 | 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | **COMPLETE — 146 tests green; doctor 21 ok / 3 warn / 0 fail** |
-| 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | not started |
+| 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | **COMPLETE — 177 tests green, all 10 scenarios covered** |
 | 4 | Facebook adapter + reconciliation + one real image post | not started |
 | 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | not started |
 | 6 | LinkedIn adapter + `auth linkedin` + token refresh — **blocked on API access** | blocked |
@@ -523,6 +523,85 @@ correct behaviour and was not achievable in Phase 1.
    data-derived strings reaching the console now go through
    `rich.markup.escape`, in `cli.py` and `status.py`.
 
-**Still open for Phase 3:** `prepare` is called by hand. The `publish` run
-algorithm must call it as step 5, after the lease is written, so that a crash
-during normalisation leaves a lease to expire rather than an unrecorded attempt.
+**Carried into Phase 3 and now done:** `publish` calls `prepare_post_platform`
+itself, after the lease is written.
+
+
+---
+
+## 13. Phase 3 findings (complete, 2026-09-23)
+
+**Built:** `postpilot/publishers/{base,registry}.py`, `postpilot/reconcile.py`,
+`postpilot/publish.py`. `publish` is a real command with the two-flag gate.
+**All ten failure-injection scenarios pass**, plus two extra the work surfaced.
+177 tests, none touching a real API or Google.
+
+### The run order IS the safety property
+
+```
+1. sync                     validate, assign IDs, reconcile _State with the Sheet
+2. Action column            act, then clear the cell
+3. expire stale leases      publishing older than 20 min -> unknown (never a retry)
+4. reconcile unknowns       including the ones step 3 just created
+5. select what is due
+6. lease THIS row, flush    written to _State BEFORE its own API call
+7. publish, record          result written the moment it is known
+8. roll up, _Log
+```
+
+Two orderings changed during the phase, both because a test failed:
+
+- **Leases expire before reconciliation, not during selection.** Originally a
+  stale lease became `unknown` at step 5, *after* reconciliation had already
+  run — so a crashed run took two further runs to resolve instead of one.
+- **Each row is leased immediately before its own API call**, not all of them
+  in one batch up front. With batch leasing, a run that died partway left rows
+  it never reached sitting `publishing`, which then needed a lease expiry and a
+  reconciliation to discover that nothing had happened. Now an unattempted row
+  is simply still `scheduled`.
+
+### Reconciliation: the one place we reason about uncertainty
+
+The rule that makes it safe:
+
+- **A successful lookup that does not contain our post is evidence of
+  absence** — so it is safe to schedule again. Nothing can be duplicated
+  because nothing is there.
+- **A lookup that fails is evidence of nothing.** The state stays `unknown`,
+  rolls up to `needs_review`, and a human decides.
+
+This is the only reading under which the guarantee survives. "If a remote API
+result is ambiguous, PostPilot stops and asks a human" — a *negative* result
+from a working API is not ambiguous. Matching requires caption **and** time
+(±30 min); either alone is too loose.
+
+### What happens when the Sheet itself fails mid-run
+
+Nothing can be written, because the Sheet is the broken thing. So the recovery
+is the lease: it was written **before** the API call, so `_State` still says
+`publishing`. That row ages out into `unknown` and the next run settles it by
+looking at the platform. The run is allowed to die here rather than papering
+over it — and `test_sheet_write_failure_after_success_is_covered_by_the_lease`
+plus `test_the_surviving_lease_then_resolves_to_published_next_run` assert the
+whole journey.
+
+### Other decisions
+
+- **An adapter that raises becomes `unknown`, not a retry.** If an adapter
+  throws instead of classifying, we cannot know whether the request was sent.
+- **Media problems are permanent, not retryable.** A missing file is not fixed
+  by waiting; it is fixed by a human.
+- **A missing adapter is a permanent failure on that platform only.** The other
+  platforms on the row still publish — which is exactly what `restocklypos`
+  will need until Phase 6.
+
+### Verified against the real Sheet
+
+`publish --live` without `--confirm` is refused. `publish --dry-run` ran the
+whole pipeline and reported `gi-0001 FB: would publish` / `IG: would publish`,
+and `_State` afterwards still read `attempts=0, attempt_id=''` — **the dry run
+wrote no lease**, which is the property that makes it safe to run any time.
+
+**Phase 4 note:** `postpilot/publishers/registry.py` returns an empty dict.
+Adding Facebook is one entry there plus one adapter module; nothing else in the
+run algorithm changes.

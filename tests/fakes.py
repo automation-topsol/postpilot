@@ -103,3 +103,43 @@ def state_column(client: FakeSheetClient, post_id: str, platform: str, column: s
 
 def a1(col_index: int, row_number: int) -> str:
     return f"{a1_column(col_index)}{row_number}"
+
+
+# --------------------------------------------------------------------------
+# Publishers
+# --------------------------------------------------------------------------
+class FakePublisher:
+    """A programmable `Publisher`. Records every call; sends nothing."""
+
+    def __init__(self, platform, behaviour=None, recent=None) -> None:
+        self.platform = platform
+        # behaviour: either a PublishResult, an Exception to raise, or a
+        # callable taking (prepared, creds) and returning/raising either.
+        self.behaviour = behaviour
+        self.recent = recent if recent is not None else []
+        self.calls: list = []
+        self.lookups: int = 0
+        self.lookup_error: Exception | None = None
+
+    def publish(self, prepared, creds):
+        from postpilot.publishers.base import PublishResult
+
+        self.calls.append(prepared)
+        behaviour = self.behaviour
+        if callable(behaviour) and not isinstance(behaviour, BaseException):
+            behaviour = behaviour(prepared, creds)
+        if isinstance(behaviour, BaseException):
+            raise behaviour
+        if behaviour is None:
+            return PublishResult.success(f"remote-{len(self.calls)}", f"https://example.test/{len(self.calls)}")
+        return behaviour
+
+    def find_recent(self, creds, since):
+        self.lookups += 1
+        if self.lookup_error is not None:
+            raise self.lookup_error
+        return list(self.recent)
+
+    @property
+    def call_count(self) -> int:
+        return len(self.calls)
