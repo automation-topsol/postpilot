@@ -248,7 +248,7 @@ differs from the original brief per §0.1.
 
 | # | Phase | State |
 |---|---|---|
-| 0 | **API access spike** — FB + IG publish path, R2 public read (r2.dev), service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **spike built and run; blocked on 2 credential fixes — see §10** |
+| 0 | **API access spike** — FB + IG publish path, R2 public read (r2.dev), service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **COMPLETE — live post published to both platforms, see §10** |
 | 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | not started |
 | 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | not started |
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | not started |
@@ -371,15 +371,52 @@ from Phase 1 rather than leaving it untested until late.
 - **Amendment 0.2(5) does not apply**: `instagram_basic` is granted and
   @grand.invitation resolves. Nothing to work around.
 
-### Still outstanding
+### The end-to-end publish test — PASSED 2026-09-23
 
-1. **Drive folders are empty** — drop an image into
-   `13M2wXeZlKX71PCsm3qLkPbIe5VbmALBi` so `md5Checksum` is confirmed and
-   Phase 2 has something real to normalise.
-2. **No live test post has been made.** Read-only checks prove access, not the
-   publish path. One real image post is the honest end of Phase 0 and needs an
-   explicit go-ahead: v1 cannot delete a published post.
+`spike/publish_end_to_end.py` ran the entire chain against the real accounts
+and published to both platforms:
 
-Resolved: the 60-day R2 lifecycle rule was **confirmed by hand on 2026-09-23**
-and recorded in `R2_LIFECYCLE_CONFIRMED`, so the check now reports it as
-confirmed instead of warning on every run.
+```
+Drive (PNG, md5 47bd99c0…)
+  -> download
+  -> normalise per platform (PNG -> JPEG, 1254x1254, 311 KB)
+  -> R2 deterministic key, HEAD-then-PUT
+  -> public URL over r2.dev
+  -> Facebook /photos  +  Instagram container -> FINISHED -> media_publish
+```
+
+| Result | |
+|---|---|
+| Facebook | `post_id 1355072654348977_122114927469466419` |
+| Instagram | `media_id 18026718245885330`, https://www.instagram.com/p/DdmxphpnDhS/ |
+
+**What this actually de-risked**, beyond "it works":
+
+- **The deterministic key + HEAD reuse path is real.** The live run reused the
+  objects the dry run had uploaded (`R2 reuse - object already present`),
+  which is the behaviour Phase 2 depends on to stay inside the R2 free tier.
+  Same Drive md5, same policy version, same key.
+- **PNG -> JPEG conversion is mandatory, not cosmetic.** The source was a PNG;
+  Instagram accepts JPEG only. Converting for *both* platforms (rather than
+  only for IG) also sidesteps Facebook's "PNG over 1 MB may appear pixelated"
+  caveat. Confirms the §3.1 normalisation decision.
+- **`post_id` really is distinct from `id`.** Facebook returned photo id
+  `122114927445466419` and post_id `…_122114927469466419` - different numbers.
+  Recording the wrong one gives a `Remote URL` that 404s and breaks
+  reconciliation matching.
+- **Per-platform captions work end to end.** Facebook got the clean caption,
+  Instagram got the same text plus hashtags - the path the Sheet's
+  `Caption (Facebook)` / `Caption (Instagram)` columns will use.
+- **The IG container flow needs no retry logic at this size.** Container went
+  to `FINISHED` on the first poll. The 5-minute timeout -> `unknown` path
+  remains untested and should be exercised with a video in Phase 5.
+
+**Phase 0 is complete.** Every Facebook, Instagram, Google and R2 dependency is
+proven end to end. LinkedIn remains the only untested platform, by design.
+
+### Cleanup owed
+
+The test posts are live on both platforms and **the tool cannot delete them** -
+v1 has no deletion. They must be removed by hand from the Page and the IG
+account. The R2 objects under `grandinvitation/spike-0001/` expire themselves
+via the 60-day lifecycle rule.

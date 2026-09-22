@@ -269,3 +269,24 @@ both `instagram_basic` and `instagram_content_publish`, and @grand.invitation
 resolves with a readable publishing quota. No workaround was needed, and none
 should be built. The IG User ID (`17841432916654917`) goes into `_Brands`,
 where `check_meta.py --ig-id` cross-checks it on every subsequent run.
+
+### The end-to-end test published to both platforms, not just one
+
+A single-platform test would have proven less than it appears: Facebook accepts
+a `url` parameter and publishes synchronously, while Instagram requires the
+two-step container flow with polling. They share almost no code path. Running
+both against the same source image also surfaced the thing a one-platform test
+hides — that the *same* Drive file needs *different* normalised output per
+platform, stored under different R2 keys, which is precisely why `{platform}`
+is in the key template rather than just `{brand}/{post_id}`.
+
+### The dry run uploading to R2 is a feature, not a leak
+
+`--dry-run` deliberately performs the full media pipeline including the R2
+`PUT`, stopping only before the publish call and the lease write. This felt
+wrong at first — a dry run that writes something — but it is what makes the
+subsequent live run exercise the *reuse* path rather than the upload path, and
+reuse is the behaviour that keeps R2 inside the free tier. It also means a dry
+run surfaces media problems (wrong aspect, oversized, unfetchable URL) at the
+time someone is actually looking at the output. The objects are addressed by
+content hash and expire on their own, so an unused upload costs nothing.
