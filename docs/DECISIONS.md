@@ -554,3 +554,55 @@ what each API call would carry — then stops. Because no lease is written, a dr
 run is safe to execute at any moment, including while the real scheduler is
 running, and it cannot affect what the next real run does. Verified against the
 live Sheet: after a dry run, `_State` still read `attempts=0, attempt_id=""`.
+
+---
+
+## Phase 4 — Facebook
+
+### Classification lives in the HTTP layer, not in each adapter
+
+Whether a failure can be retried is the single most consequential judgement the
+tool makes, so it is made in one place. `publishers/http.call()` maps httpx's
+own distinction onto ours: `ConnectError`/`ConnectTimeout` mean the connection
+never opened, so nothing was sent and a retry is safe; `ReadTimeout` and
+`RemoteProtocolError` mean the request went out and the answer did not come
+back, which is `unknown`. Adapters that called httpx directly would each have
+to re-derive this, and one of them would eventually get it wrong.
+
+### Reading the Page uses `/published_posts`
+
+The obvious edge is `/{page}/feed`, and it is what the brief implies. Against
+the real API it returns `(#10) This endpoint requires the
+'pages_read_engagement' permission or the 'Page Public Content Access' feature`
+even with a token that *has* `pages_read_engagement` — because `/feed` includes
+posts by other people on the Page, which needs the extra App feature.
+`/published_posts` needs only what we have, and is narrower in exactly the
+right way: reconciliation wants posts this Page published, and a visitor post
+that happened to quote our caption would be a false match.
+
+### `find_recent` raises instead of returning an empty list
+
+An empty list and a failed lookup are indistinguishable to the caller unless
+the failure is loud, and the reconciler treats them completely differently:
+empty means "not published, safe to reschedule", failed means "we learned
+nothing, ask a human". Returning `[]` on an API error would silently convert
+the second into the first, which is the one mistake that ends in a double post.
+
+### A half-created carousel is `unknown`
+
+Carousel children are real objects on the Page from the moment they are
+created, even with `published=false`. So the failure windows are not equal: a
+failure on the first child means nothing exists and a retry is clean, while a
+failure on the second child, or between the children and the feed post, leaves
+photos behind that a retry would duplicate. Those cases return `unknown` with a
+count of what is orphaned, so the human knows what to clear before using
+`Action=retry`.
+
+### `post_id` is recorded, `id` is discarded
+
+`/photos` returns both and they are different numbers — Phase 0 saw
+`122114927445466419` and `1355072654348977_122114927469466419` for one post.
+`id` identifies the photo object; `post_id` identifies the feed post, and it is
+what produces a working permalink and what `/published_posts` returns during
+reconciliation. Recording the wrong one gives the teammate a link that 404s and
+quietly breaks `unknown` resolution.

@@ -8,14 +8,21 @@ failure on that platform alone, leaving the others to publish.
 
 from __future__ import annotations
 
+import httpx
+
 from postpilot.models import Platform
 from postpilot.publishers.base import Publisher
+from postpilot.publishers.facebook import FacebookPublisher
+from postpilot.publishers.http import build_client
 
 
-def available_publishers() -> dict[Platform, Publisher]:
+def available_publishers(client: httpx.Client | None = None) -> dict[Platform, Publisher]:
     """Built adapters, keyed by platform.
 
-    Phase 4 adds Facebook, Phase 5 Instagram, Phase 6 LinkedIn.
+    One shared httpx client, so connections are reused across every post in a
+    run. LinkedIn arrives in Phase 6, once API access is approved.
     """
-    publishers: dict[Platform, Publisher] = {}
-    return publishers
+    shared = client or build_client()
+    return {
+        Platform.FB: FacebookPublisher(shared),
+    }

@@ -252,7 +252,7 @@ differs from the original brief per §0.1.
 | 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | **COMPLETE — runs against the real Sheet; 79 tests green** |
 | 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | **COMPLETE — 146 tests green; doctor 21 ok / 3 warn / 0 fail** |
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | **COMPLETE — 177 tests green, all 10 scenarios covered** |
-| 4 | Facebook adapter + reconciliation + one real image post | not started |
+| 4 | Facebook adapter + reconciliation + one real image post | **COMPLETE — adapter + reconciliation live-verified; live post deferred to the operator** |
 | 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | not started |
 | 6 | LinkedIn adapter + `auth linkedin` + token refresh — **blocked on API access** | blocked |
 | 7 | Automation: workflows, summary (Telegram **or** `_Log` fallback, §0.5), launchd script, docs polish | not started |
@@ -605,3 +605,49 @@ wrote no lease**, which is the property that makes it safe to run any time.
 **Phase 4 note:** `postpilot/publishers/registry.py` returns an empty dict.
 Adding Facebook is one entry there plus one adapter module; nothing else in the
 run algorithm changes.
+
+
+---
+
+## 14. Phase 4 findings (complete, 2026-09-23)
+
+**Built:** `postpilot/publishers/{http,facebook}.py`, registry wired.
+201 tests. Image, carousel, reel and text all covered with `respx` fixtures,
+plus every classification branch.
+
+### `/published_posts`, not `/feed` — found by calling the real API
+
+`/{page}/feed` fails with `(#10) This endpoint requires ... Page Public Content
+Access` on an ordinary Page token, because it *also* returns visitor posts.
+`/{page}/published_posts` works with the token we already have, and is
+semantically what reconciliation wants: things **this Page published**. Visitor
+posts in the result set would have been a false-match risk.
+
+### Reconciliation verified against real data
+
+`find_recent` read 12 real published posts, and `find_match` correctly matched
+the Phase 0 live post by caption + timestamp, returning exactly the `post_id`
+recorded back then (`1355072654348977_122114927469466419`). That is the whole
+`unknown -> published` path proven against the real Graph API, without
+publishing anything.
+
+### A half-built carousel is `unknown`, not a retry
+
+Carousel children are created with `published=false`, and they exist on the
+Page's object graph the moment they are created. So a failure *partway through*
+the children, or between the children and the feed post, cannot be retried —
+retrying would create a second set and could double-post. Those two branches
+return `unknown` with a message saying how many photos are orphaned and that
+they need clearing by hand. A failure on the **first** child is still a clean
+permanent failure, because nothing exists yet.
+
+### The live post is deliberately deferred
+
+The operator was asleep. Each live post is public and the tool cannot delete
+it, and Phase 0 already proved the real publish path end to end with these
+credentials. To do it:
+
+```bash
+# set the Date on a row to today, then:
+uv run postpilot publish --live --confirm --post <id> --brand grandinvitation
+```
