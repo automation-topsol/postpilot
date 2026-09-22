@@ -28,8 +28,20 @@ These were agreed after `CLAUDE_CODE_PROMPT.md` was written and **override it**:
 3. **Local git only for now.** No GitHub remote yet; `gh` is not installed.
    The Actions workflows still get written (Phase 7) and committed.
 4. **Credentials live in `.env`**, filled in by the operator, never in chat and
-   never committed. The Sheet ID, brand list and R2 custom domain are read from
+   never committed. The Sheet ID, brand list and R2 base URL are read from
    `.env` / `config.yaml` — do not hardcode them anywhere.
+5. **Telegram is optional.** It is not set up, and the tool must work without
+   it. Missing `TELEGRAM_*` vars are a **`doctor` WARNING, never a failure**,
+   and `postpilot summary` writes the daily digest to the **`_Log` tab**
+   instead, so a summary is never silently lost. A missing notifier degrades
+   reporting, not delivery — nothing about publishing may depend on it.
+6. **No custom domain for R2.** `R2_PUBLIC_BASE_URL` is the `*.r2.dev`
+   development URL, and that is the chosen configuration, not a temporary
+   state to warn about. r2.dev is rate-limited and unsupported for production
+   traffic, but at 20-50 posts/week that ceiling is nowhere near reached.
+   Moving to a custom domain later is a one-line change to
+   `R2_PUBLIC_BASE_URL` and nothing else - which is exactly why the
+   `MediaStore` interface keeps the URL out of the rest of the code.
 
 ---
 
@@ -236,14 +248,14 @@ differs from the original brief per §0.1.
 
 | # | Phase | State |
 |---|---|---|
-| 0 | **API access spike** — FB + IG publish path, R2 custom-domain public read, service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **in progress** |
+| 0 | **API access spike** — FB + IG publish path, R2 public read (r2.dev), service-account Sheet/Drive access; record real media limits in `docs/MEDIA_POLICIES.md`. LinkedIn deferred. | **spike built and run; blocked on 2 credential fixes — see §10** |
 | 1 | Models + Sheet: `init`, `sheet init`, `sync`, `status`, `_State`/`_Log`, tests | not started |
 | 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | not started |
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | not started |
 | 4 | Facebook adapter + reconciliation + one real image post | not started |
 | 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | not started |
 | 6 | LinkedIn adapter + `auth linkedin` + token refresh — **blocked on API access** | blocked |
-| 7 | Automation: workflows, Telegram summary, launchd script, docs polish | not started |
+| 7 | Automation: workflows, summary (Telegram **or** `_Log` fallback, §0.5), launchd script, docs polish | not started |
 
 **Stop at the end of each phase and show the operator what works before
 continuing.** Keep this table's "State" column current — it is how the next
@@ -296,3 +308,55 @@ Plus unit tests for row parsing, timezone/due selection, media policies
 `python3` 3.12.6 · `git` 2.50.1 · `uv` 0.12.17 · `ffmpeg`/`ffprobe` 9.0.2
 (installed via Homebrew) · `gh` **not installed** (no remote yet, §0.3).
 `ffmpeg`/`ffprobe` are preinstalled on `ubuntu-latest`; `doctor` checks for them.
+
+---
+
+## 10. Phase 0 findings (run 2026-09-23)
+
+What the spike actually proved against the real accounts. **Two blockers** must
+clear before Phase 2 and Phase 4 respectively; everything else is green.
+
+| Area | Result |
+|---|---|
+| Google service account | OK - `postpilot@postpilot-509419.iam.gserviceaccount.com` |
+| Sheet read | OK - "PostPilot Content Calendar"; tabs `_Brands`, `_State`, `_Log` already exist but are **empty** |
+| Sheet write | OK - scratch tab written, read back, deleted |
+| Drive folders | untested - no folder IDs in `_Brands` yet |
+| R2 bucket reachable | OK - `postpilot-media` |
+| **R2 write** | **FAIL - `AccessDenied`, the API token is read-only** |
+| R2 anonymous public read | **unverified**, blocked by the write failure. This is the single most important check in Phase 0. |
+| R2 lifecycle rule | WARN - not readable with an object-scoped token; verify the 60-day rule by hand in the dashboard |
+| Meta Page | OK - "Grand Invitation", page_id `1355072654348977` |
+| Meta scopes | OK - all six, FB and IG |
+| **Meta token lifetime** | **FAIL - short-lived, expired 2026-09-22 22:00 UTC** |
+| **Instagram** | OK - **`instagram_basic` IS granted**; @grand.invitation, ig_user_id `17841432916654917`, linked and reachable |
+| IG publishing quota | OK - 0 of 100 used in 24h |
+| Telegram | unconfigured by choice (§0.5) |
+
+### The two blockers
+
+**1. The R2 API token is read-only.** `HeadBucket` succeeds while `PutObject`
+returns `AccessDenied` - that combination means the credentials are valid and
+the bucket is right, so the keys themselves are not the problem. Create a
+Cloudflare R2 API token with **Object Read & Write** on `postpilot-media` and
+replace `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`. Until then the
+anonymous-public-read check cannot run, and that is the check whose failure
+would otherwise stay invisible until a post was due.
+
+**2. The Meta Page token is short-lived and has expired.** A token that dies in
+hours cannot drive an unattended scheduler. The fix is a two-step exchange:
+`GET /oauth/access_token?grant_type=fb_exchange_token&client_id=...&client_secret=...&fb_exchange_token=<short_lived_user_token>`
+for a long-lived **user** token, then `GET /me/accounts` with it and take the
+Page's `access_token` - that one has **no expiry**, which is the target state.
+`postpilot auth meta` automates this in Phase 4; `spike/check_meta.py` prints
+the same instructions whenever it sees a short-lived token.
+
+### Amendment 0.2(5) resolved
+
+The concern that the app could not obtain `instagram_basic` **is not borne
+out**. `/debug_token` shows both `instagram_basic` and
+`instagram_content_publish` granted, and the linked Business account resolves
+to @grand.invitation with a readable publishing quota. Nothing needs fixing
+there. The IG User ID above belongs in `_Brands`, after which
+`check_meta.py --ig-id` cross-checks it on every future run - a mismatch would
+mean publishing one brand to another brand's account, which v1 cannot undo.

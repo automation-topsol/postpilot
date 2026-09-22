@@ -90,7 +90,10 @@ class Report:
         try:
             from rich.console import Console
 
-            self.console = Console()
+            # markup=False: a brand slug in [brackets], or a Meta error body
+            # containing them, would otherwise be swallowed as rich markup.
+            # highlight=False: stops rich recolouring IDs and URLs mid-line.
+            self.console = Console(markup=False, highlight=False)
         except ImportError:
             self.console = None
 
@@ -102,7 +105,11 @@ class Report:
         else:
             print(text)
 
-    def add(self, name: str, outcome: Outcome, detail: str = "", **facts: str) -> Check:
+    def add(self, _name: str, _outcome: Outcome, _detail: str = "", **facts: str) -> Check:
+        # Leading underscores so a fact called `name`, `detail` or `outcome`
+        # cannot collide with the signature — several API responses have a
+        # `name` field and the collision is a TypeError at the worst moment.
+        name, outcome, detail = _name, _outcome, _detail
         check = Check(name, outcome, detail, {k: str(v) for k, v in facts.items()})
         self.checks.append(check)
         style, glyph = _STYLE[outcome]
@@ -111,17 +118,17 @@ class Report:
             self._emit(f"      {key}: {value}", "dim")
         return check
 
-    def ok(self, name: str, detail: str = "", **facts: str) -> Check:
-        return self.add(name, Outcome.PASS, detail, **facts)
+    def ok(self, _name: str, _detail: str = "", **facts: str) -> Check:
+        return self.add(_name, Outcome.PASS, _detail, **facts)
 
-    def fail(self, name: str, detail: str = "", **facts: str) -> Check:
-        return self.add(name, Outcome.FAIL, detail, **facts)
+    def fail(self, _name: str, _detail: str = "", **facts: str) -> Check:
+        return self.add(_name, Outcome.FAIL, _detail, **facts)
 
-    def skip(self, name: str, detail: str = "", **facts: str) -> Check:
-        return self.add(name, Outcome.SKIP, detail, **facts)
+    def skip(self, _name: str, _detail: str = "", **facts: str) -> Check:
+        return self.add(_name, Outcome.SKIP, _detail, **facts)
 
-    def warn(self, name: str, detail: str = "", **facts: str) -> Check:
-        return self.add(name, Outcome.WARN, detail, **facts)
+    def warn(self, _name: str, _detail: str = "", **facts: str) -> Check:
+        return self.add(_name, Outcome.WARN, _detail, **facts)
 
     def missing(self, names: list[str]) -> Check:
         """Uniform SKIP for absent credentials — tells the operator what to fill."""

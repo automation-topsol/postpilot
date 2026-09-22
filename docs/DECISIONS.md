@@ -126,6 +126,31 @@ adapter against an existing interface, not a refactor. Its media limits are
 already recorded in `docs/MEDIA_POLICIES.md` §4 so Phase 6 needs no new
 research pass.
 
+### Telegram is optional, with a `_Log` fallback rather than a silent gap
+
+Telegram is not set up, and making the daily summary depend on it would mean
+the tool reports nothing until a bot exists. But simply skipping the summary
+when unconfigured is worse than it looks: the summary is the *only* routine
+signal that the scheduler is alive, and a scheduler that silently stops is this
+project's worst failure. So a missing notifier is a `doctor` **warning**, never
+an error, and `postpilot summary` writes the same digest to the `_Log` tab
+instead — where it is durable, timestamped and visible to the non-technical
+teammate who already lives in the Sheet. Publishing never depends on the
+notifier in either direction; the notifier only ever reads state that already
+exists.
+
+### R2 stays on the `r2.dev` URL, and that is recorded as a choice
+
+No custom domain is configured, so `R2_PUBLIC_BASE_URL` is the `*.r2.dev`
+development URL. Cloudflare rate-limits r2.dev and documents it as unsuitable
+for production, which is a real constraint — but the relevant number is our
+volume: 20–50 posts/week, each item fetched a handful of times by Meta's
+fetcher. That is orders of magnitude below where the limit bites. The spike
+therefore reports r2.dev as **PASS**, not a warning, because a warning that
+fires on every run for a deliberate choice trains people to ignore warnings.
+The `MediaStore` interface exists precisely so that swapping in a custom domain
+later is a change to one environment variable and nothing else.
+
 ### Local git only, no remote yet
 
 `gh` is not installed and the GitHub repo does not exist yet. The Actions
@@ -180,3 +205,67 @@ runner (fresh filesystem every run) behaves identically to a laptop. A cache
 file would have to be committed, synced, or rebuilt, and all three are worse
 than one `HEAD` request. `POLICY_VERSION` is in the key so that changing a
 normalisation rule invalidates old output rather than silently reusing it.
+
+
+---
+
+## Phase 0 — what the spike found, and what it changed
+
+### A short-lived Meta token is a FAIL, not a warning
+
+The Page token in `.env` was short-lived and had already expired. It would have
+been easy to report "expires soon" and move on, but the distinction that
+matters is not *when* it expires — it is *what kind of token it is*. A
+correctly-minted long-lived Page token reports **no expiry at all**; anything
+with an expiry timestamp came from the Graph API Explorer and will die in hours
+regardless of how often it is refreshed. For an unattended scheduler that is a
+hard blocker, so the check fails below 48 hours and prints the exact two-step
+exchange (`fb_exchange_token` → `/me/accounts`) rather than a generic "token
+expired". The same logic becomes `postpilot auth meta` in Phase 4.
+
+### `AccessDenied` on PUT is reported as a token-scope problem, not a credential problem
+
+`HeadBucket` succeeding while `PutObject` returns `AccessDenied` is a precise
+signature: the keys are valid, the bucket name is right, and the token is
+read-only. Reporting the raw botocore error would send the operator to re-check
+credentials that are fine. The check now names the actual fix — create a token
+with **Object Read & Write** — and separately downgrades a lifecycle-rule
+`AccessDenied` to a warning, because reading lifecycle config needs
+bucket-level permission that an object-scoped token legitimately lacks. Those
+two failures have the same error code and completely different remedies.
+
+### When the write fails, the public-read check reports SKIP rather than disappearing
+
+The anonymous public GET is the most valuable check in Phase 0 — it is the only
+one whose failure is invisible until a post is due. If the upload fails, that
+check cannot run, and a silently absent check reads as a passing one. It now
+emits an explicit `SKIP` saying it is *still unverified*, so the gap is visible
+in the report rather than inferred from its absence.
+
+### `tasks` is not available on `/me` for a Page token
+
+Requesting it returns `(#100) Tried accessing nonexisting field (tasks)` — the
+field only exists on `/me/accounts`, which needs a user token. The check now
+probes for it quietly and falls back to `id,name,link`, reporting a SKIP that
+explains publishing capability is implied by the `pages_manage_posts` scope
+instead. Worth recording because the error message blames the field rather than
+the token type, which sends you looking in the wrong place.
+
+### rich markup is disabled in the spike's console
+
+`Console()` interprets `[...]` as markup, which silently ate the brand slug in
+the report title (`=== Meta [grandinvitation] ===` rendered as `=== Meta ===`)
+and would have eaten any Meta error body containing brackets. Diagnostic output
+that quietly drops content is worse than no output, so the console is
+constructed with `markup=False, highlight=False`. Related: `Report.add` now
+takes `_name`/`_detail` so an API field called `name` cannot collide with the
+method signature — that collision was a `TypeError` raised in the middle of
+reporting a successful check.
+
+### `instagram_basic` turned out to already be granted
+
+Recorded because the project brief carried the opposite assumption. The app has
+both `instagram_basic` and `instagram_content_publish`, and @grand.invitation
+resolves with a readable publishing quota. No workaround was needed, and none
+should be built. The IG User ID (`17841432916654917`) goes into `_Brands`,
+where `check_meta.py --ig-id` cross-checks it on every subsequent run.

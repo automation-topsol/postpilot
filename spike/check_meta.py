@@ -46,11 +46,14 @@ def slug_to_env(slug: str) -> str:
     return "META_PAGE_TOKEN_" + slug.upper().replace("-", "_")
 
 
-def get(report: Report, path: str, token: str, **params) -> dict | None:
+def get(report: Report, path: str, token: str, quiet: bool = False, **params) -> dict | None:
     """GET the Graph API, reporting the error body rather than raising.
 
     Meta's error bodies are the single most useful diagnostic here, and they
     are lost if we let httpx raise, so they are surfaced verbatim.
+
+    `quiet=True` returns None on error without reporting it — for probes where
+    failure is an expected answer rather than a problem.
     """
     import httpx
 
@@ -58,11 +61,15 @@ def get(report: Report, path: str, token: str, **params) -> dict | None:
     try:
         resp = httpx.get(f"{GRAPH}/{path.lstrip('/')}", params=params, timeout=30)
     except httpx.HTTPError as exc:
-        report.fail(f"GET /{path}", f"transport error: {exc}")
+        if not quiet:
+            report.fail(f"GET /{path}", f"transport error: {exc}")
         return None
 
     if resp.status_code == 200:
         return resp.json()
+
+    if quiet:
+        return None
 
     body = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
     err = body.get("error", {})
@@ -97,15 +104,47 @@ def check_token(report: Report, token: str) -> dict:
         return info
 
     expires_at = info.get("expires_at", 0)
+    token_type = str(info.get("type", "?"))
     if expires_at == 0:
-        # Long-lived Page tokens minted from a long-lived user token do not
-        # expire. That is exactly what we want for an unattended scheduler.
-        report.ok("token valid", "never expires (long-lived Page token)", type=str(info.get("type", "?")))
+        # A Page token minted from a LONG-LIVED user token never expires. That
+        # is the only kind fit for an unattended scheduler, so it is the target
+        # state — anything else needs exchanging before we go live.
+        report.ok("token lifetime", "never expires (long-lived Page token)", type=token_type)
     else:
         expiry = dt.datetime.fromtimestamp(expires_at, dt.UTC)
-        days = (expiry - dt.datetime.now(dt.UTC)).days
-        detail = f"expires {expiry:%Y-%m-%d} ({days} days)"
-        (report.warn if days < 14 else report.ok)("token valid", detail, type=str(info.get("type", "?")))
+        remaining = expiry - dt.datetime.now(dt.UTC)
+        hours = remaining.total_seconds() / 3600
+        detail = f"expires {expiry:%Y-%m-%d %H:%M} UTC ({remaining.days}d {int(hours % 24)}h left)"
+        if hours <= 0:
+            report.fail("token lifetime", f"ALREADY EXPIRED — {detail}", type=token_type)
+        elif hours < 48:
+            # This is the signature of a SHORT-LIVED token taken straight from
+            # the Graph API Explorer. It cannot run a scheduler: the cron would
+            # start failing within hours and every post would go stale.
+            report.fail(
+                "token lifetime",
+                f"SHORT-LIVED token — {detail}. Unusable for an unattended "
+                f"scheduler; exchange it for a long-lived Page token (see below)",
+                type=token_type,
+            )
+            report.warn(
+                "how to fix the token",
+                "1) exchange the short-lived USER token for a long-lived one: "
+                "GET /oauth/access_token?grant_type=fb_exchange_token"
+                "&client_id=$META_APP_ID&client_secret=$META_APP_SECRET"
+                "&fb_exchange_token=<short_lived_user_token>  "
+                "2) then GET /me/accounts with that long-lived user token and take "
+                "the Page's access_token — it will have no expiry",
+            )
+        elif remaining.days < 14:
+            report.warn("token lifetime", detail, type=token_type)
+        else:
+            report.warn(
+                "token lifetime",
+                f"{detail} — expiring tokens need rotation; prefer a "
+                f"never-expiring long-lived Page token",
+                type=token_type,
+            )
 
     scopes = set(info.get("scopes", []))
     for label, needed in (("Facebook", FB_SCOPES), ("Instagram", IG_SCOPES)):
@@ -118,24 +157,34 @@ def check_token(report: Report, token: str) -> dict:
 
 
 def check_page(report: Report, token: str) -> dict:
-    """Confirm the token's Page and the tasks it grants."""
-    page = get(report, "me", token, fields="id,name,tasks,link")
-    if not page:
-        return {}
+    """Confirm the token's Page, and its tasks where the API will give them."""
+    # `tasks` is only exposed on /me/accounts (a USER token). Asking for it
+    # with a PAGE token returns "(#100) nonexisting field", so try it, then
+    # fall back — the Page identity matters, the task list is a bonus.
+    page = get(report, "me", token, fields="id,name,link,tasks", quiet=True)
+    if page is None:
+        page = get(report, "me", token, fields="id,name,link")
+        if page is None:
+            return {}
+        report.skip(
+            "Page tasks",
+            "not exposed to a Page token — publishing capability is implied by "
+            "the pages_manage_posts scope instead",
+        )
 
-    tasks = page.get("tasks", [])
     report.ok(
         "Page reachable",
         page.get("name", "?"),
         page_id=str(page.get("id", "?")),
         link=str(page.get("link", "?")),
-        tasks=", ".join(tasks) or "(none reported)",
     )
-    # CREATE_CONTENT is the task the /photos edge actually requires.
-    if tasks and "CREATE_CONTENT" not in tasks:
-        report.fail("Page CREATE_CONTENT task", f"token holder has {tasks} — cannot publish")
-    elif tasks:
-        report.ok("Page CREATE_CONTENT task", "present")
+    tasks = page.get("tasks", [])
+    if tasks:
+        # CREATE_CONTENT is the task the /photos edge actually requires.
+        if "CREATE_CONTENT" in tasks:
+            report.ok("Page CREATE_CONTENT task", ", ".join(tasks))
+        else:
+            report.fail("Page CREATE_CONTENT task", f"token holder has {tasks} — cannot publish")
     return page
 
 
@@ -159,7 +208,7 @@ def check_instagram(report: Report, token: str, page_id: str, expected_ig_id: st
         "Instagram Business account",
         f"@{ig.get('username', '?')}",
         ig_user_id=ig_id,
-        name=str(ig.get("name", "?")),
+        account_name=str(ig.get("name", "?")),
     )
     if expected_ig_id and expected_ig_id != ig_id:
         # A silent mismatch here would publish to the wrong account.
@@ -296,7 +345,9 @@ def main() -> int:
         report.skip("Instagram checks", "Page unreachable")
         return report.summary()
 
-    ig_id = check_instagram(report, token, page_id, args.ig_id)
+    ig_id = None
+    with report.guard("Instagram checks"):
+        ig_id = check_instagram(report, token, page_id, args.ig_id)
 
     if args.publish:
         if not args.image_url:

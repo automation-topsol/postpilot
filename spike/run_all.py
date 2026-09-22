@@ -64,6 +64,8 @@ def main() -> int:
 
     failures += run_script("check_google.py", [])
     failures += run_script("check_r2.py", [])
+    # Optional by design — an unconfigured notifier SKIPs rather than fails.
+    failures += run_script("check_telegram.py", [])
 
     brands = [args.brand] if args.brand else discover_brands()
     if not brands:

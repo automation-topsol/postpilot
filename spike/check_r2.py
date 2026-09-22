@@ -69,8 +69,10 @@ def check_write_and_public_read(report: Report, s3, bucket: str, public_base: st
     stamp = dt.datetime.now(dt.UTC).isoformat()
     body = f"postpilot access probe {stamp}\n".encode()
 
+    from botocore.exceptions import ClientError
+
     wrote = False
-    with report.guard("PUT object"):
+    try:
         s3.put_object(
             Bucket=bucket,
             Key=PROBE_KEY,
@@ -82,8 +84,25 @@ def check_write_and_public_read(report: Report, s3, bucket: str, public_base: st
         )
         report.ok("PUT object", PROBE_KEY, bytes=str(len(body)))
         wrote = True
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code in {"AccessDenied", "AccessDeniedException", "403"}:
+            # HeadBucket succeeding while PutObject is denied is the signature
+            # of a read-only API token. Naming that precisely saves the
+            # operator from re-checking their keys, which are fine.
+            report.fail(
+                "PUT object",
+                "AccessDenied — the bucket is reachable but this token cannot write. "
+                "The R2 API token is read-only: in Cloudflare, create a token with "
+                "'Object Read & Write' on this bucket and update R2_ACCESS_KEY_ID / "
+                "R2_SECRET_ACCESS_KEY.",
+            )
+        else:
+            report.fail("PUT object", f"{code}: {exc}")
 
     if not wrote:
+        report.skip("HEAD object", "nothing was uploaded")
+        report.skip("anonymous public GET", "nothing was uploaded — THE critical check, still unverified")
         return
 
     try:
@@ -142,6 +161,15 @@ def check_lifecycle(report: Report, s3, bucket: str) -> None:
                 f"Add a rule expiring objects after {LIFECYCLE_EXPECTED_DAYS} days.",
             )
             return
+        if code in {"AccessDenied", "AccessDeniedException", "403"}:
+            report.warn(
+                "lifecycle rule",
+                "cannot be read with this API token (bucket-level permission). "
+                f"Verify by hand in the Cloudflare dashboard that {bucket} expires "
+                f"objects after {LIFECYCLE_EXPECTED_DAYS} days — it is what keeps "
+                "R2 inside the free tier.",
+            )
+            return
         raise
 
     rules = conf.get("Rules", [])
@@ -162,15 +190,23 @@ def check_lifecycle(report: Report, s3, bucket: str) -> None:
 
 
 def check_public_base(report: Report, public_base: str) -> None:
-    if ".r2.dev" in public_base:
-        report.warn(
+    """The r2.dev development URL is the chosen configuration — see CLAUDE.md §0.4.
+
+    It is not a misconfiguration to flag, but it does carry a real constraint:
+    Cloudflare rate-limits r2.dev and does not support it for production
+    traffic. At 20-50 posts/week, with each item fetched a handful of times by
+    Meta, that ceiling is nowhere near being approached — so this is recorded,
+    not warned about. Moving to a custom domain is a one-line change to
+    R2_PUBLIC_BASE_URL and nothing else.
+    """
+    if not public_base.startswith("https://"):
+        report.fail("public base URL", "must be https:// — Meta will not fetch http media", url=public_base)
+    elif ".r2.dev" in public_base:
+        report.ok(
             "public base URL",
-            "using an r2.dev URL — acceptable for local testing only. "
-            "r2.dev is rate-limited and not for production; move to a custom domain.",
+            "r2.dev development URL (chosen; rate-limited but ample at this volume)",
             url=public_base,
         )
-    elif not public_base.startswith("https://"):
-        report.fail("public base URL", "must be https:// — Meta will not fetch http media", url=public_base)
     else:
         report.ok("public base URL", "custom domain", url=public_base)
 
