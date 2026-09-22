@@ -746,7 +746,7 @@ and its org URN is filled into `_Brands`.
 ## 17. Phase 7 findings (complete, 2026-09-23)
 
 **Built:** `postpilot/summary.py`, three workflows, the launchd installer,
-docs polish. 288 tests.
+docs polish. 264 tests.
 
 ### The digest is never silently skipped
 
