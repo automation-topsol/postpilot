@@ -15,6 +15,7 @@ Run:  uv run python spike/check_google.py
 
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
@@ -128,8 +129,9 @@ def check_sheet(report: Report, creds) -> list[dict]:
     return []
 
 
-def check_drive(report: Report, creds, brands: list[dict]) -> None:
+def check_drive(report: Report, creds, brands: list[dict], extra: list[tuple[str, str]] | None = None) -> None:
     """Read each brand's Drive folder and confirm md5Checksum is available."""
+    extra = extra or []
     from googleapiclient.discovery import build
 
     drive = build("drive", "v3", credentials=creds, cache_discovery=False)
@@ -139,7 +141,10 @@ def check_drive(report: Report, creds, brands: list[dict]) -> None:
         for b in brands
         if str(b.get("Drive Folder ID", "")).strip()
     ]
-    # Lets the operator test one folder before the Sheet is populated.
+    # Before _Brands is populated, folders can be supplied directly:
+    #   DRIVE_FOLDERS=slug=id,slug=id      (or a single DRIVE_FOLDER_ID)
+    #   --folder slug=id --folder slug=id
+    folders.extend(extra)
     if not folders and (override := env("DRIVE_FOLDER_ID")):
         folders = [("(DRIVE_FOLDER_ID)", override)]
 
@@ -188,7 +193,30 @@ def check_drive(report: Report, creds, brands: list[dict]) -> None:
                 report.ok(f"Drive folder [{slug}] md5Checksum", "present on all usable files")
 
 
+def parse_folders(values: list[str]) -> list[tuple[str, str]]:
+    """Parse `slug=folder_id` pairs from --folder flags or DRIVE_FOLDERS."""
+    pairs = []
+    for raw in values:
+        for item in raw.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            slug, _, folder_id = item.partition("=")
+            pairs.append((slug.strip(), folder_id.strip()) if folder_id else ("(unnamed)", slug.strip()))
+    return pairs
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description="Phase 0 Google access spike")
+    parser.add_argument(
+        "--folder",
+        action="append",
+        default=[],
+        metavar="SLUG=ID",
+        help="test a Drive folder before _Brands is populated; repeatable",
+    )
+    args = parser.parse_args()
+
     load_env()
     report = Report("Google — service account, Sheets, Drive")
     report.header()
@@ -201,8 +229,12 @@ def main() -> int:
         report.skip("Sheets + Drive checks", "no usable credentials")
         return report.summary()
 
+    extra = parse_folders(args.folder or [])
+    if not extra and (from_env := env("DRIVE_FOLDERS")):
+        extra = parse_folders([from_env])
+
     brands = check_sheet(report, creds)
-    check_drive(report, creds, brands)
+    check_drive(report, creds, brands, extra)
     return report.summary()
 
 

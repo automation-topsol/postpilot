@@ -311,52 +311,62 @@ Plus unit tests for row parsing, timezone/due selection, media policies
 
 ---
 
-## 10. Phase 0 findings (run 2026-09-23)
+## 10. Phase 0 findings (complete, 2026-09-23)
 
-What the spike actually proved against the real accounts. **Two blockers** must
-clear before Phase 2 and Phase 4 respectively; everything else is green.
+**Phase 0 passes with no failures.** Every access the tool depends on for
+Facebook, Instagram, Google and R2 is proven against the real accounts.
 
 | Area | Result |
 |---|---|
-| Google service account | OK - `postpilot@postpilot-509419.iam.gserviceaccount.com` |
-| Sheet read | OK - "PostPilot Content Calendar"; tabs `_Brands`, `_State`, `_Log` already exist but are **empty** |
-| Sheet write | OK - scratch tab written, read back, deleted |
-| Drive folders | untested - no folder IDs in `_Brands` yet |
-| R2 bucket reachable | OK - `postpilot-media` |
-| **R2 write** | **FAIL - `AccessDenied`, the API token is read-only** |
-| R2 anonymous public read | **unverified**, blocked by the write failure. This is the single most important check in Phase 0. |
-| R2 lifecycle rule | WARN - not readable with an object-scoped token; verify the 60-day rule by hand in the dashboard |
-| Meta Page | OK - "Grand Invitation", page_id `1355072654348977` |
-| Meta scopes | OK - all six, FB and IG |
-| **Meta token lifetime** | **FAIL - short-lived, expired 2026-09-22 22:00 UTC** |
-| **Instagram** | OK - **`instagram_basic` IS granted**; @grand.invitation, ig_user_id `17841432916654917`, linked and reachable |
-| IG publishing quota | OK - 0 of 100 used in 24h |
-| Telegram | unconfigured by choice (§0.5) |
+| Google service account | PASS - `postpilot@postpilot-509419.iam.gserviceaccount.com` |
+| Sheet read / write | PASS - "PostPilot Content Calendar" (`1jO8T0SZ_vyIzhMok2c-nMSG81TMQCxUyOmn5mTwqbi4`); tabs `_Brands`, `_State`, `_Log` exist but are **empty** |
+| Drive folders | PASS - both readable; **both empty**, so `md5Checksum` is still unproven |
+| R2 bucket / PUT / HEAD / DELETE | PASS - `postpilot-media` |
+| **R2 anonymous public GET** | **PASS** - the check that matters most; Meta and LinkedIn will be able to fetch our media |
+| R2 lifecycle rule | WARN - not readable with an object-scoped token; **still needs manual confirmation** in the Cloudflare dashboard |
+| Meta tokens (all 3 Pages) | PASS - long-lived Page tokens, **no expiry** |
+| Instagram | PASS - `instagram_basic` + `instagram_content_publish` granted; quota 0/100 |
+| Telegram | SKIP by choice (§0.5) |
+| LinkedIn | not checked - access pending (§0.2) |
 
-### The two blockers
+### Confirmed platform IDs — these seed `_Brands`
 
-**1. The R2 API token is read-only.** `HeadBucket` succeeds while `PutObject`
-returns `AccessDenied` - that combination means the credentials are valid and
-the bucket is right, so the keys themselves are not the problem. Create a
-Cloudflare R2 API token with **Object Read & Write** on `postpilot-media` and
-replace `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`. Until then the
-anonymous-public-read check cannot run, and that is the check whose failure
-would otherwise stay invisible until a post was due.
+| Page | Slug | Facebook Page ID | Instagram | Drive folder |
+|---|---|---|---|---|
+| Grand Invitation | `grandinvitation` | `1355072654348977` | `17841432916654917` (@grand.invitation) | `13M2wXeZlKX71PCsm3qLkPbIe5VbmALBi` |
+| A One Care | `aonecare` | `873552192507968` | `17841404568805350` (@aonecarepak) | *not supplied* |
+| TOPSOL | `topsol` | `108364721570952` | **none linked** | *not supplied* |
+| *(unknown)* | `restocklypos` | *no Page found* | — | `1LEf9Dqlm7GefhpzPRMI8HFR4hXbrqV-Z` |
 
-**2. The Meta Page token is short-lived and has expired.** A token that dies in
-hours cannot drive an unattended scheduler. The fix is a two-step exchange:
-`GET /oauth/access_token?grant_type=fb_exchange_token&client_id=...&client_secret=...&fb_exchange_token=<short_lived_user_token>`
-for a long-lived **user** token, then `GET /me/accounts` with it and take the
-Page's `access_token` - that one has **no expiry**, which is the target state.
-`postpilot auth meta` automates this in Phase 4; `spike/check_meta.py` prints
-the same instructions whenever it sees a short-lived token.
+Two gaps to resolve before Phase 1 writes `_Brands`:
+- **`restocklypos` has a Drive folder but no Facebook Page** among the three
+  the token administers. Either its Page is under a different account, or the
+  brand is Drive-only for now. Its `Enabled Platforms` must reflect reality —
+  a brand listing a platform it has no credentials for produces `invalid` rows
+  forever.
+- **TOPSOL has no linked Instagram account.** Its `Enabled Platforms` must be
+  `FB` only. This is exactly the "not every brand has every platform" case the
+  brief calls for, and the first real test of per-platform validation.
 
-### Amendment 0.2(5) resolved
+### What Phase 0 resolved along the way
 
-The concern that the app could not obtain `instagram_basic` **is not borne
-out**. `/debug_token` shows both `instagram_basic` and
-`instagram_content_publish` granted, and the linked Business account resolves
-to @grand.invitation with a readable publishing quota. Nothing needs fixing
-there. The IG User ID above belongs in `_Brands`, after which
-`check_meta.py --ig-id` cross-checks it on every future run - a mismatch would
-mean publishing one brand to another brand's account, which v1 cannot undo.
+- **Meta tokens were wrong twice**, in two different ways: first a short-lived
+  Page token, then a short-lived *user* token in a `META_PAGE_TOKEN_*` slot.
+  `spike/meta_exchange_token.py` now performs the whole exchange
+  (`fb_exchange_token` -> `/me/accounts`) and writes the resulting
+  never-expiring Page tokens into `.env`. **It is the working prototype of
+  `postpilot auth meta`** — Phase 4 should build on it, not restart it.
+- **The R2 token was read-only.** Replaced with Object Read & Write; the
+  anonymous public read now passes.
+- **Amendment 0.2(5) does not apply**: `instagram_basic` is granted and
+  @grand.invitation resolves. Nothing to work around.
+
+### Still outstanding
+
+1. **Confirm the 60-day R2 lifecycle rule by hand** — unreadable with an
+   object-scoped token, and it is what keeps R2 in the free tier.
+2. **Drive folders are empty** — drop one image into each so `prepare` has
+   something real to normalise in Phase 2, and so `md5Checksum` is confirmed.
+3. **No live test post has been made.** Read-only checks prove access, not the
+   publish path. One real image post per platform is the honest end of Phase 0,
+   and it needs an explicit go-ahead: v1 cannot delete a published post.

@@ -146,6 +146,21 @@ def check_token(report: Report, token: str) -> dict:
                 type=token_type,
             )
 
+    # A USER token in a META_PAGE_TOKEN_* slot is the single most confusing
+    # misconfiguration here: it authenticates fine, /me returns a *person*, and
+    # the first sign of trouble is "nonexisting field (instagram_business_account)"
+    # several checks later. Name it at the source instead.
+    if token_type.upper() != "PAGE":
+        report.fail(
+            "token type",
+            f"this is a {token_type} token, not a PAGE token. /me will resolve to a "
+            "person, not your Page, and Instagram lookups will fail with "
+            "'(#100) nonexisting field'. Get the Page token from GET /me/accounts "
+            "— see: uv run python spike/meta_exchange_token.py --help",
+        )
+    else:
+        report.ok("token type", "PAGE")
+
     scopes = set(info.get("scopes", []))
     for label, needed in (("Facebook", FB_SCOPES), ("Instagram", IG_SCOPES)):
         gap = needed - scopes
