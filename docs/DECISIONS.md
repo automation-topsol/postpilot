@@ -650,3 +650,46 @@ must not in tests — and reaching for `monkeypatch` on `time.sleep` from a doze
 tests is both noisier and easier to get wrong than passing a no-op in. The
 timeout is injected for the same reason, which is how the "still processing
 after the deadline" branch is tested at all.
+
+---
+
+## Phase 6 — LinkedIn, written but unverified
+
+### Shipping an unverified adapter, gated three ways
+
+The alternative was to leave LinkedIn unwritten until access arrives, and to
+lose the context in which the rest of the system was built. Writing it now costs
+little and keeps the shape of the thing intact, but an adapter that has never
+run is a genuine liability if it can be reached by accident. So it is gated:
+the registry adds it only when `LINKEDIN_ACCESS_TOKEN` exists, `doctor` warns
+on every run that it is unverified, and the fixtures carry a comment saying
+they are documentation-derived rather than recorded. Honest labelling is what
+makes the code an asset rather than a trap.
+
+### LinkedIn uploads bytes; Meta fetches URLs
+
+Meta takes an `image_url` and fetches the media from its own servers, which is
+the entire reason R2 has to be publicly readable. LinkedIn does the opposite:
+it issues an upload URL and expects the bytes. So the LinkedIn adapter has to
+download our own R2 object and PUT it back up — a round trip that does not exist
+for the other platforms. `fetch` is a constructor argument both to make that
+testable and to make the asymmetry visible to whoever reads the class next. A
+failure fetching our own media is `retryable`, not `permanent`: R2 being briefly
+unreachable says nothing about the post.
+
+### A video part with no ETag is `unknown`
+
+`finalizeUpload` requires the ETag of every uploaded part, in order. If a PUT
+succeeds but the response carries no ETag, the upload cannot be completed and
+we also cannot say what state the video is in on LinkedIn's side. Treating it as
+a clean failure would risk a second upload of the same video; `unknown` sends it
+to a human, which is the right cost for an ambiguous case.
+
+### A refresh that returns no refresh token keeps the old one
+
+LinkedIn's refresh response does not always include a new refresh token, and the
+old one remains valid when it does not. Overwriting the stored value with an
+empty string would lock the operator out at the next expiry, with no way back
+except a full browser round trip — and they would only discover it sixty days
+later, when the scheduler quietly stopped. Carrying the old value forward is one
+line and removes the whole failure mode.

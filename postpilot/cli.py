@@ -383,12 +383,55 @@ def auth_meta(brand: str = typer.Option(..., "--brand")) -> None:
 
 
 @auth_app.command("linkedin")
-def auth_linkedin() -> None:
-    """Acquire and refresh the single LinkedIn token. (Phase 6)
+def auth_linkedin(
+    refresh_only: bool = typer.Option(
+        False, "--refresh", help="Use the stored refresh token instead of a browser round trip."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Acquire or refresh the single LinkedIn token.
 
-    Takes no --brand: one token covers every Company Page. See CLAUDE.md §0.1.
+    Takes no --brand: one token covers every Company Page the operator
+    administers. Only the org URN is per brand, and it lives in _Brands.
     """
-    _not_yet("auth linkedin", 6)
+    import os
+
+    from postpilot.auth.linkedin import authorize
+    from postpilot.auth.linkedin import refresh as refresh_token_flow
+
+    settings = _settings(verbose)
+    client_id = os.environ.get("LINKEDIN_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("LINKEDIN_CLIENT_SECRET", "").strip()
+    if not (client_id and client_secret):
+        _fail("LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET must be set in .env")
+
+    stored_refresh = os.environ.get("LINKEDIN_REFRESH_TOKEN", "").strip()
+    try:
+        if refresh_only or (stored_refresh and settings.linkedin_expires_at):
+            if not stored_refresh:
+                _fail("no LINKEDIN_REFRESH_TOKEN to refresh from; run without --refresh")
+            bundle = refresh_token_flow(client_id, client_secret, stored_refresh)
+            console.print("[green]✔[/green] refreshed")
+        else:
+            bundle = authorize(client_id, client_secret)
+            console.print("[green]✔[/green] authorized")
+    except Exception as exc:
+        _fail(f"LinkedIn auth failed: {exc}")
+        return
+
+    console.print("\n[bold]Put these in .env (and in your GitHub secrets):[/bold]\n")
+    for line in bundle.env_lines():
+        name, _, value = line.partition("=")
+        console.print(f"  {name}=[dim]{escape(value[:6])}…{escape(value[-4:])}[/dim]"
+                      if len(value) > 16 else f"  {escape(line)}")
+    console.print(
+        "\n[dim]Values are abbreviated here on purpose. Run with "
+        "POSTPILOT_REVEAL=1 to print them in full.[/dim]"
+    )
+    if os.environ.get("POSTPILOT_REVEAL") == "1":
+        console.print("")
+        for line in bundle.env_lines():
+            print(line)
 
 
 def main() -> None:

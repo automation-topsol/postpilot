@@ -254,7 +254,7 @@ differs from the original brief per §0.1.
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | **COMPLETE — 177 tests green, all 10 scenarios covered** |
 | 4 | Facebook adapter + reconciliation + one real image post | **COMPLETE — adapter + reconciliation live-verified; live post deferred to the operator** |
 | 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | **COMPLETE — reconciliation live-verified read-only** |
-| 6 | LinkedIn adapter + `auth linkedin` + token refresh — **blocked on API access** | blocked |
+| 6 | LinkedIn adapter + `auth linkedin` + token refresh | **written, UNVERIFIED — still blocked on API access** |
 | 7 | Automation: workflows, summary (Telegram **or** `_Log` fallback, §0.5), launchd script, docs polish | not started |
 
 **Stop at the end of each phase and show the operator what works before
@@ -693,3 +693,49 @@ that cannot be made must not block delivery.
 returning `18026718245885330` — exactly the media ID Phase 0 recorded, with
 permalink `DdmxphpnDhS`. Both platforms' `unknown -> published` paths are now
 proven against real data without publishing anything.
+
+
+---
+
+## 16. Phase 6 (LinkedIn) — written, unverified, gated
+
+**Community Management API access was still pending.** The adapter
+(`publishers/linkedin.py`) and the auth flow (`auth/linkedin.py`) are written
+from the published documentation and covered by `respx` fixtures, but **no line
+of this has touched the real API**. Three things keep that honest:
+
+1. **The registry only adds LinkedIn when `LINKEDIN_ACCESS_TOKEN` is set.** It
+   cannot be reached by accident; a token appearing is a deliberate act.
+2. **`doctor` warns** that the adapter is unverified, every run.
+3. **The fixtures are documentation-derived, and say so.** When the first real
+   run disagrees with one, fix the code *and* the fixture together — that is
+   how they become real fixtures.
+
+### What is implemented
+
+| | |
+|---|---|
+| text | `POST /rest/posts`, no `content` block |
+| image | `images?action=initializeUpload` -> PUT bytes -> URN in `content.media` |
+| carousel | several images -> **MultiImage** post (LinkedIn has no carousel type) |
+| video | `videos?action=initializeUpload` -> PUT each 4 MB part, **collect every ETag** -> `finalizeUpload` |
+| reconciliation | `GET /rest/posts?q=author` (needs `r_organization_social`) |
+| auth | authorization-code flow on `localhost:8765`, plus `--refresh` |
+
+### Things worth knowing before the first real run
+
+- **LinkedIn wants the bytes, Meta wants a URL.** Meta fetches media from our
+  R2 URL itself; LinkedIn makes us upload. So the adapter downloads our own R2
+  object and PUTs it — which is why `fetch` is injectable and why a failure
+  there is `retryable` rather than `permanent`.
+- **The post URN comes back in the `x-restli-id` header**, not the body.
+- **`finalizeUpload` needs every part's ETag in order.** A part that uploads
+  but returns no ETag makes the video unfinishable, so that is `unknown`.
+- **A refresh that returns no new refresh token keeps the old one.** LinkedIn
+  does not always issue one, and blanking it would lock the operator out.
+- Access tokens last ~60 days, refresh tokens ~1 year. `doctor` warns from 7
+  days out. **This is the most likely thing to silently break** — a scheduler
+  needing a human every two months stops working while nobody is watching.
+
+`restocklypos` is LinkedIn-only, so it publishes nothing until this is verified
+and its org URN is filled into `_Brands`.

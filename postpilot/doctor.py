@@ -430,6 +430,14 @@ def _check_linkedin(report: DoctorReport, settings: Settings, brands: list) -> N
         )
         return
 
+    # The adapter has never run against the live API. Saying so here is the
+    # difference between a surprise and an expected first-run adjustment.
+    report.warn(
+        "LinkedIn adapter",
+        "written from the published docs and never run against the live API — "
+        "expect to adjust it on the first real post",
+    )
+
     expires = settings.linkedin_expires_at
     if expires is None:
         report.warn("LinkedIn token", "LINKEDIN_TOKEN_EXPIRES unset — expiry cannot be checked")
