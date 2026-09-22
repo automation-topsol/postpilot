@@ -606,3 +606,47 @@ count of what is orphaned, so the human knows what to clear before using
 what produces a working permalink and what `/published_posts` returns during
 reconciliation. Recording the wrong one gives the teammate a link that 404s and
 quietly breaks `unknown` resolution.
+
+---
+
+## Phase 5 — Instagram
+
+### `media_publish` has no idempotency key, and the design follows from that
+
+Facebook's `/photos` is a single call whose failure modes map cleanly onto our
+classification. Instagram's publish is the second half of a container flow, and
+the API offers nothing to make it idempotent — no client token, no dedupe
+window. If the request leaves and the answer does not come back, the only way
+to find out what happened is to look. So every non-4xx failure at that step is
+`unknown` and carries the container ID, which reconciliation uses to ask. A 4xx
+is different: "already published" or "invalid creation_id" are definitive
+answers, and treating them as ambiguous would strand posts that are simply
+finished.
+
+### A failed carousel child is permanent on Instagram but unknown on Facebook
+
+These look inconsistent side by side and are not. A Facebook carousel child is
+a real photo object attached to the Page the moment it is created, so abandoning
+one leaves debris a retry would duplicate. An Instagram container is invisible
+to everybody until `media_publish`, and expires by itself after 24 hours, so
+abandoning one costs nothing and a retry is genuinely clean. The classification
+should follow what the platform leaves behind, not what the code looks like.
+
+### The quota is checked before attempting, not after failing
+
+Instagram allows 100 published posts per rolling 24 hours (50 for carousels).
+Discovering that by being rejected costs one of the post's three attempts and
+puts a confusing error in front of the teammate. Reading
+`content_publishing_limit` first costs one cheap GET and turns a wasted attempt
+into a clear "waiting for the limit to reset". If the quota endpoint itself
+cannot be read, publishing proceeds anyway: a diagnostic that fails must not
+become a gate.
+
+### Polling sleeps through an injected function
+
+`InstagramPublisher` takes `sleep` as a constructor argument. The container poll
+genuinely needs to wait five seconds between checks in production, and genuinely
+must not in tests — and reaching for `monkeypatch` on `time.sleep` from a dozen
+tests is both noisier and easier to get wrong than passing a no-op in. The
+timeout is injected for the same reason, which is how the "still processing
+after the deadline" branch is tested at all.

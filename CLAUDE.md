@@ -253,7 +253,7 @@ differs from the original brief per §0.1.
 | 2 | Drive + media + R2: policies, normalisation, deterministic keys, `prepare`, `doctor` | **COMPLETE — 146 tests green; doctor 21 ok / 3 warn / 0 fail** |
 | 3 | State machine + dry-run: lease, hashes, `Action`, reconciliation hooks, **all failure-injection tests green with fake publishers** | **COMPLETE — 177 tests green, all 10 scenarios covered** |
 | 4 | Facebook adapter + reconciliation + one real image post | **COMPLETE — adapter + reconciliation live-verified; live post deferred to the operator** |
-| 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | not started |
+| 5 | Instagram adapter (image, carousel, reel) + publishing-limit check + container reconciliation | **COMPLETE — reconciliation live-verified read-only** |
 | 6 | LinkedIn adapter + `auth linkedin` + token refresh — **blocked on API access** | blocked |
 | 7 | Automation: workflows, summary (Telegram **or** `_Log` fallback, §0.5), launchd script, docs polish | not started |
 
@@ -651,3 +651,45 @@ credentials. To do it:
 # set the Date on a row to today, then:
 uv run postpilot publish --live --confirm --post <id> --brand grandinvitation
 ```
+
+
+---
+
+## 15. Phase 5 findings (complete, 2026-09-23)
+
+**Built:** `postpilot/publishers/instagram.py`. 224 tests.
+
+### Instagram is the riskiest adapter, and the code says why
+
+Everything is a two-step container flow, and **`media_publish` has no
+idempotency key**. So the window between that request leaving and its answer
+arriving is the one place a blind retry publishes twice. Every non-4xx failure
+from that point returns `unknown` **carrying the container ID**, so
+reconciliation can ask the API what became of it. A 4xx there stays permanent —
+"already published" is a definitive answer, not an ambiguous one.
+
+### Where Instagram and Facebook deliberately differ
+
+| situation | Facebook | Instagram |
+|---|---|---|
+| carousel child fails partway | `unknown` — children are real objects on the Page and a retry duplicates them | **permanent** — containers are invisible until publish and expire on their own, so a retry is clean |
+| quota | n/a | checked **before** attempting |
+
+That asymmetry is not an inconsistency; it follows from what each platform
+leaves behind on a partial failure.
+
+### The quota gate
+
+`/{ig_user}/content_publishing_limit` is checked before every attempt. If it is
+exhausted the platform is left `retryable_failed` with a plain message, so the
+post waits rather than burning one of its three attempts on a rejection that
+was certain. If the quota itself cannot be read, publishing proceeds — a check
+that cannot be made must not block delivery.
+
+### Verified live, read-only
+
+`remaining_quota` -> 99 of 100. `find_recent` read 9 real media, and
+`find_match` resolved the Phase 0 Instagram post by caption + timestamp,
+returning `18026718245885330` — exactly the media ID Phase 0 recorded, with
+permalink `DdmxphpnDhS`. Both platforms' `unknown -> published` paths are now
+proven against real data without publishing anything.

@@ -14,6 +14,7 @@ from postpilot.models import Platform
 from postpilot.publishers.base import Publisher
 from postpilot.publishers.facebook import FacebookPublisher
 from postpilot.publishers.http import build_client
+from postpilot.publishers.instagram import InstagramPublisher
 
 
 def available_publishers(client: httpx.Client | None = None) -> dict[Platform, Publisher]:
@@ -25,4 +26,5 @@ def available_publishers(client: httpx.Client | None = None) -> dict[Platform, P
     shared = client or build_client()
     return {
         Platform.FB: FacebookPublisher(shared),
+        Platform.IG: InstagramPublisher(shared),
     }
