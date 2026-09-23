@@ -28,6 +28,7 @@ adapter is only registered once `LINKEDIN_ACCESS_TOKEN` exists. See
 | `docs/MEDIA_POLICIES.md` | verified per-platform media limits + pinned API versions |
 | `docs/DECISIONS.md` | why each design decision was made |
 | `docs/HOW_TO_ADD_A_POST.md` | the non-technical teammate's guide — send them this |
+| `docs/WEEKLY_IMPORT.md` | the weekly bulk import: plan format, AI prompt, `postpilot ui` |
 | `CLAUDE_CODE_PROMPT.md` | the original full brief |
 
 ---
@@ -178,6 +179,8 @@ postpilot summary                     # digest by email/Telegram, or to _Log
 postpilot doctor                      # check every credential
 postpilot auth meta --brand <slug>    # mint a long-lived Page token
 postpilot auth linkedin [--refresh]   # one token for every Company Page
+postpilot auth google                 # sign in as you, for the local importer's Drive uploads
+postpilot ui                          # the local weekly importer (http://127.0.0.1:8766)
 ```
 
 GitHub Actions is the only routine live publisher; the cron runs at
@@ -193,6 +196,29 @@ nothing can be published. Local live publishing needs **both** `--live` and
 scheduler is in charge. If you also run the launchd job
 (`scripts/install-local-launchd.sh`), disable the GitHub Actions cron — run
 one or the other, never both.
+
+### Local importer (`postpilot ui`)
+
+A page on `127.0.0.1` where you drop a week's `.md` plan plus its files,
+review every post, and click Import. It uploads the files to each brand's
+Drive folder and appends the rows to the Sheet — exactly what a person would
+do by hand — and the scheduler publishes them as usual. Full guide:
+`docs/WEEKLY_IMPORT.md`.
+
+One-time setup, because the service account can read Drive but has no storage
+to upload with:
+
+1. Google Cloud console → the `postpilot-509419` project → **APIs & Services →
+   OAuth consent screen**: External, add yourself as a test user.
+2. **Credentials → Create credentials → OAuth client ID → Desktop app.**
+   Put the ID and secret in `.env` as `GOOGLE_OAUTH_CLIENT_ID` /
+   `GOOGLE_OAUTH_CLIENT_SECRET`.
+3. `uv run postpilot ui` → **Sign in with Google** (or `postpilot auth google`).
+
+While the consent screen is in **Testing**, Google expires the sign-in after
+7 days, so you will be asked again roughly weekly — once per import, which is
+fine. Setting it to **In production** (no verification needed for your own
+use; you click through an "unverified app" warning once) removes that.
 
 ---
 

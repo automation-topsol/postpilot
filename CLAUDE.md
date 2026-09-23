@@ -2,7 +2,7 @@
 
 ## START HERE (session handoff, last updated 2026-09-23)
 
-**Everything is committed. Working tree clean. 316 tests pass, lint clean,
+**Everything is committed. Working tree clean. 357 tests pass, lint clean,
 `postpilot doctor` reports 22 ok / 2 warnings / 0 failures.**
 
 All seven phases are done. The two `doctor` warnings are expected states,
@@ -10,28 +10,32 @@ not problems, and share one cause — LinkedIn access is pending: no
 `LINKEDIN_ACCESS_TOKEN`, and `restocklypos` has no org URN yet. Both clear
 themselves when access lands. The daily summary goes by email (§0.5).
 
-### The single most important open item
+### Newest: the local weekly importer (§0.7) — built, NOT yet run for real
 
-**`postpilot publish --live --confirm` has never actually published anything.**
-The adapters are covered by `respx` fixtures and reconciliation is verified
-against real data, but the full path — lease → prepare → adapter → record →
-roll-up — has only ever run in `--dry-run`. Phase 0 proved the Graph calls, but
-with the *spike's* code, not the adapter's.
+`postpilot ui` is written, tested (fakes only), and its **preview** was run
+against the real Sheet read-only. It has **never uploaded to Drive or
+appended a row**, because that needs the operator to create a Desktop OAuth
+client (`GOOGLE_OAUTH_CLIENT_ID/SECRET`, README "Local importer") and sign in.
+First real import: use a plan dated a day or two out, then check the rows in
+the Sheet and let the next Actions run assign IDs.
 
-Do it on a **text-only Facebook post first**: no media pipeline, no Instagram
-container, smallest blast radius, and it still exercises the lease and the
-state machine end to end.
+### Live publishing is proven (text) — next: an image post
+
+`gi-0004` (text, FB) was published live through the real adapter on
+2026-09-23: lease -> adapter -> record -> roll-up all worked. The media
+pipeline and the Instagram adapter have still only run live via the Phase 0
+spike, so the next check is an image post to FB + IG:
 
 ```bash
-# set a row's Date/Time to now, then:
-uv run postpilot publish --live --confirm --post <id> --brand grandinvitation
+# set gi-0001's Date/Time to now, then:
+uv run postpilot publish --live --confirm --post gi-0001 --brand grandinvitation
 ```
 
 ### Waiting on the operator
 
 1. Delete the two Phase 0 test posts (the tool cannot — v1 has no deletion).
-2. Push to GitHub and add the secrets in the README; that is what actually
-   turns the scheduler on. There is no remote yet and `gh` is not installed.
+2. ~~Push to GitHub and add the secrets~~ — done; the scheduler and the
+   email digest are live. `gh` is still not installed.
 3. Telegram bot, if wanted. Until then the digest goes to `_Log`, by design.
 4. LinkedIn Community Management API access.
 
@@ -97,6 +101,14 @@ These were agreed after `CLAUDE_CODE_PROMPT.md` was written and **override it**:
    Moving to a custom domain later is a one-line change to
    `R2_PUBLIC_BASE_URL` and nothing else - which is exactly why the
    `MediaStore` interface keeps the URL out of the rest of the code.
+7. **A local importer is allowed, as a narrow exception to "no web UI".**
+   `postpilot ui` (FastAPI on `127.0.0.1:8766`, never deployed) takes a weekly
+   `.md` plan + files, previews every post, then uploads to Drive **as the
+   operator** (`postpilot auth google`, token in `.postpilot/`) and appends
+   rows with `ID` blank. It never leases, publishes, writes `_State` **or runs
+   `sync`** (a concurrent `_State` rewrite can double-publish — see
+   DECISIONS). Plan format: `docs/WEEKLY_IMPORT.md`. Code: `plan.py`,
+   `importer.py`, `auth/google.py`, `ui/`.
 
 ---
 
@@ -117,6 +129,10 @@ web UI, AI caption generation, analytics, stories, comment handling, post
 editing/deleting after publish, or multi-user permissions. It stays
 **CLI + Sheet + GitHub Actions**. If a task seems to need infrastructure,
 that is a signal the design is being misread — re-read, don't build a server.
+
+**One operator-approved exception:** the local-only weekly importer (§0.7).
+It is a convenience front end for the Sheet and Drive, outside the delivery
+path. Do not grow it into a hosted app or give it publishing powers.
 
 ---
 
@@ -293,6 +309,8 @@ Rules:
 | `postpilot summary` | Telegram daily digest |
 | `postpilot doctor` | full environment check |
 | `postpilot auth meta --brand slug` / `auth linkedin` | guided token acquisition |
+| `postpilot auth google` | sign in as the operator, for the importer's Drive uploads |
+| `postpilot ui` | local weekly importer — §0.7 |
 
 Note `auth linkedin` takes **no** `--brand` (one token, all pages) — this
 differs from the original brief per §0.1.

@@ -149,6 +149,22 @@ class SheetClient:
         writer.writes.clear()
         return count
 
+    def append_rows(self, title: str, rows: list[list[Any]]) -> None:
+        """Append rows below the last filled row, in ONE call.
+
+        Used only by the local importer, which adds rows exactly as a person
+        would. RAW keeps "2026-09-28" and "18:30" as the text `sync` parses,
+        rather than letting Sheets reinterpret them as locale dates.
+        """
+        if not rows:
+            return
+        worksheet = self.book.worksheet(title)
+        worksheet.append_rows(
+            rows, value_input_option="RAW", insert_data_option="INSERT_ROWS", table_range="A1"
+        )
+        self._tabs.pop(title, None)  # the cached snapshot is now stale
+        log.info("appended %d row(s) to %s", len(rows), title)
+
     def replace_rows(self, title: str, headers: list[str], rows: list[list[Any]]) -> None:
         """Rewrite a whole machine-owned tab (`_State`) in one update.
 

@@ -837,3 +837,52 @@ notifier is set, rather than one per channel, because an unconfigured Telegram
 beside a working email is a choice, not a problem. SMTP verifies TLS against
 certifi's bundle because macOS Python builds ship without a usable CA store
 and failed Gmail's certificate on the first real run.
+
+## A local importer, as an exception to "no web UI"
+
+The brief rules out a web UI, and the reason still holds: nothing about
+*delivery* may depend on a server. The operator's real workflow, though, is a
+weekly batch made in other tools, and typing twenty rows and dragging twenty
+files is exactly the manual work the tool exists to remove. `postpilot ui` is
+therefore allowed on three conditions that keep it outside the delivery path.
+It binds to `127.0.0.1` only and is never deployed. It does only what a person
+could do by hand — upload files to Drive and append rows with `ID` blank — and
+never leases, publishes or writes `_State`. And it validates with the Sheet's
+own `parse_post` on the exact row it will write, so the preview and `sync`
+cannot disagree. The plan is a fixed Markdown template rather than free text
+parsed by an LLM: a misread schedule is a public post that cannot be deleted,
+and a deterministic format with a copyable AI prompt gets the flexibility of
+"let an AI write it" without the misreading.
+
+### The importer does not run `sync`
+
+`sync` rewrites the whole `_State` tab. Run from a laptop while a GitHub
+Actions run is mid-publish, it can read `_State`, let Actions record
+`published`, and then write the stale `scheduled` back — the precise shape of
+a double publish. So the importer only appends brand-tab rows, which cannot
+collide with anything the scheduler writes (it addresses existing rows by
+number, and appended rows sit below all of them), and leaves ID assignment to
+the next scheduled run. The same hazard applies to running `postpilot sync`
+by hand while the cron is live; it is safe between runs, not during one.
+
+### Uploads run as a person, not the service account
+
+Service accounts have no Drive storage, so creating a file in a My Drive
+folder fails with `storageQuotaExceeded`. Moving the folders to a Shared Drive
+would fix that but needs Workspace and changes every folder ID; a one-time
+browser sign-in changes nothing. The token is personal and machine-local, so it
+lives in `.postpilot/` (gitignored) rather than `.env`, and GitHub Actions
+never has it — the scheduler has no reason to write to Drive.
+
+### Import-time guards
+
+Duplicates are detected on brand + scheduled time + the **full** captions —
+never a prefix, after adversarial defect #2 — so importing a plan twice adds
+nothing, while a two-part series at the same hour still imports. A post dated
+in the past is blocked, because a plan imported late would otherwise publish
+its whole week on the next run. A Drive file is reused only when its bytes
+match *and* its name resolves to exactly that file; a new file with a taken
+name gets an md5 suffix, since two files sharing a name is the "ambiguous"
+error `sync` refuses to guess about. The server refuses non-local `Host`
+headers and cross-origin POSTs: a multipart upload is a "simple" request any
+website could otherwise send to it.

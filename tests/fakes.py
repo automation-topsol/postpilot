@@ -57,6 +57,10 @@ class FakeSheetClient:
             sheet_id=self._tabs[title].sheet_id if title in self._tabs else 99,
         )
 
+    def append_rows(self, title: str, rows: list[list[Any]]) -> None:
+        self._tabs[title].rows.extend([list(r) for r in rows])
+        self.appended_rows = getattr(self, "appended_rows", []) + [(title, r) for r in rows]
+
     def append_log(self, entries: list[LogEntry]) -> None:
         self.appended_logs.extend(entries)
 

@@ -405,6 +405,30 @@ def summary(
 
 
 @app.command()
+def ui(
+    port: int = typer.Option(8766, "--port", help="Local port (8765 is LinkedIn's OAuth callback)."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Do not open a browser tab."),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Open the local weekly importer: drop a plan + files, review, import.
+
+    Local only (127.0.0.1). It uploads to Drive and appends Sheet rows exactly
+    as a person would; the scheduler publishes them as usual.
+    """
+    from postpilot.ui.server import serve
+
+    settings = _settings(verbose)
+    try:
+        settings.sheet_id  # noqa: B018 - fail fast with a clear message
+        settings.google_credentials  # noqa: B018
+    except MissingSetting as exc:
+        _fail(str(exc))
+        return
+    console.print(f"PostPilot importer on [bold]http://127.0.0.1:{port}[/bold] — Ctrl+C to stop")
+    serve(settings, port=port, open_browser=not no_browser)
+
+
+@app.command()
 def doctor(
     offline: bool = typer.Option(False, "--offline", help="Only check local tooling."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
@@ -441,6 +465,25 @@ def auth_meta(brand: str = typer.Option(..., "--brand")) -> None:
     console.print("[yellow]![/yellow] `auth meta` arrives in Phase 4.")
     console.print("[dim]Working prototype: uv run python spike/meta_exchange_token.py --help[/dim]")
     raise typer.Exit(code=2)
+
+
+@auth_app.command("google")
+def auth_google(verbose: bool = typer.Option(False, "--verbose", "-v")) -> None:
+    """Sign in as yourself so `postpilot ui` can upload to Drive.
+
+    The service account can read the brand folders but has no Drive storage to
+    upload with. The token is saved to .postpilot/ (gitignored), not .env.
+    """
+    from postpilot.auth.google import TOKEN_PATH, sign_in, signed_in_email
+
+    _settings(verbose)
+    try:
+        creds = sign_in()
+    except MissingSetting as exc:
+        _fail(str(exc))
+        return
+    who = signed_in_email(creds) or "your account"
+    console.print(f"[green]✔[/green] signed in as {escape(who)}; token saved to {TOKEN_PATH}")
 
 
 @auth_app.command("linkedin")

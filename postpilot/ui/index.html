@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostPilot Importer</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%227%22 fill=%22%232f5bea%22/></svg>">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #1c2330; --muted: #677084; --line: #e2e5eb;
+    --accent: #2f5bea; --ok: #12805c; --okbg: #e6f5ee; --bad: #c62f3a; --badbg: #fdecee;
+    --warn: #9a6100; --warnbg: #fff4de; --dup: #5b6475; --dupbg: #eef0f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b2029; --ink: #e6e9ef; --muted: #98a1b3; --line: #2c3340;
+      --accent: #7c9cff; --ok: #4fd1a1; --okbg: #15312a; --bad: #ff7b86; --badbg: #3a1d22;
+      --warn: #f3bf62; --warnbg: #3a2e14; --dup: #aab2c2; --dupbg: #262c37;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px;
+           border-bottom: 1px solid var(--line); background: var(--panel); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; }
+  header .meta { color: var(--muted); font-size: 13px; }
+  header .spacer { flex: 1; }
+  main { max-width: 1180px; margin: 0 auto; padding: 24px; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+           padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  a { color: var(--accent); }
+  .drop { border: 2px dashed var(--line); border-radius: 14px; padding: 44px 24px; text-align: center;
+          background: var(--panel); transition: border-color .15s, background .15s; }
+  .drop.over { border-color: var(--accent); }
+  .drop h2 { margin: 0 0 6px; font-size: 20px; }
+  .drop p { margin: 4px 0; color: var(--muted); }
+  .banner { padding: 10px 14px; border-radius: 10px; margin: 0 0 16px; }
+  .banner.bad { background: var(--badbg); color: var(--bad); }
+  .banner.ok { background: var(--okbg); color: var(--ok); }
+  .banner.warn { background: var(--warnbg); color: var(--warn); }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 20px 0 14px; }
+  .bar .counts { color: var(--muted); }
+  .chip { display: inline-block; padding: 1px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
+  .chip.ok { background: var(--okbg); color: var(--ok); }
+  .chip.bad { background: var(--badbg); color: var(--bad); }
+  .chip.dup { background: var(--dupbg); color: var(--dup); }
+  .chip.warn { background: var(--warnbg); color: var(--warn); }
+  .cards { display: grid; gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px;
+          display: grid; grid-template-columns: 220px 1fr; gap: 18px; }
+  .card.off { opacity: .55; }
+  .thumbs { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 6px; align-content: start; }
+  .thumbs img, .thumbs video, .thumbs .missing { width: 100%; aspect-ratio: 1; object-fit: cover;
+          border-radius: 6px; background: var(--dupbg); }
+  .thumbs .missing { display: grid; place-items: center; font-size: 11px; color: var(--bad); padding: 4px;
+          text-align: center; word-break: break-all; }
+  .thumbs .text { grid-column: 1 / -1; color: var(--muted); font-size: 13px; padding: 18px 0; text-align: center;
+          border: 1px dashed var(--line); border-radius: 6px; }
+  .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .head strong { font-size: 16px; }
+  .head .spacer { flex: 1; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  label { font-size: 12px; color: var(--muted); display: block; }
+  input, select, textarea { font: inherit; width: 100%; padding: 6px 8px; border: 1px solid var(--line);
+          border-radius: 6px; background: var(--bg); color: var(--ink); }
+  textarea { min-height: 70px; resize: vertical; }
+  .issues { margin: 8px 0 0; padding: 0; list-style: none; font-size: 13px; }
+  .issues li { padding: 3px 0; }
+  .issues .bad { color: var(--bad); } .issues .warn { color: var(--warn); } .issues .dup { color: var(--dup); }
+  .tabs { display: flex; gap: 4px; margin-top: 10px; }
+  .tabs button { padding: 3px 10px; font-size: 13px; }
+  .tabs button.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+  .preview { white-space: pre-wrap; background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+          padding: 10px; font-size: 14px; margin-top: 6px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 13px; margin-top: 8px; }
+  .result { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-top: 16px; }
+  .result ul { margin: 6px 0; }
+  .muted { color: var(--muted); }
+  #signin[hidden], [hidden] { display: none !important; }
+  @media (max-width: 720px) {
+    header, main { padding-left: 16px; padding-right: 16px; }
+    .card { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>PostPilot Importer</h1>
+  <span class="meta" id="sheetMeta">connecting…</span>
+  <span class="spacer"></span>
+  <span class="meta" id="who"></span>
+  <button id="signin" hidden>Sign in with Google</button>
+</header>
+
+<main>
+  <div id="banner"></div>
+
+  <section id="dropView">
+    <div class="drop" id="drop">
+      <h2>Drop this week's plan and files</h2>
+      <p>One <code>.md</code> plan and every image and video it mentions, all at once.</p>
+      <p style="margin-top:14px">
+        <button class="primary" id="pick">Choose files…</button>
+        <input type="file" id="picker" multiple hidden>
+      </p>
+      <p style="margin-top:14px"><a href="/template.md">Download the plan template</a> ·
+        <a href="#" id="copyPrompt">Copy a prompt for your AI</a></p>
+    </div>
+  </section>
+
+  <section id="reviewView" hidden>
+    <div class="bar">
+      <button id="restart">← Start over</button>
+      <button id="addFiles">Add missing files…</button>
+      <input type="file" id="addPicker" multiple hidden>
+      <span class="counts" id="counts"></span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="primary" id="importBtn">Import</button>
+    </div>
+    <div class="cards" id="cards"></div>
+    <div id="result"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const isVideo = n => /\.(mp4|mov|m4v|webm|avi|mkv)$/i.test(n);
+
+let state = { batch: null, reviews: [], files: [], google: null, brands: [] };
+let reviewTimer = null;
+
+const AI_PROMPT = `Write my weekly social media plan as Markdown in EXACTLY this format, nothing else.
+
+Rules:
+- One block per post. The block starts with "## <Day> YYYY-MM-DD HH:MM" (Pakistan time, 24-hour).
+- Fields first, one per line: brand, platforms, type, media, link (optional).
+- brand: one of: {BRANDS}
+- platforms: comma-separated from FB, IG, LI
+- type: image (exactly 1 image) | carousel (2-10 images) | reel (exactly 1 video) | text (no media; not allowed on IG)
+- media: the exact file names, comma-separated, in carousel order
+- Then "caption:" on its own line followed by the caption text.
+- Optional per-platform captions: "caption fb:", "caption ig:", "caption li:" (put hashtags in caption ig).
+- Separate posts with a line containing only ---
+
+Example:
+
+## Mon 2026-09-28 18:30
+brand: grandinvitation
+platforms: FB, IG
+type: carousel
+media: gold-1.png, gold-2.png
+
+caption:
+Our new Gold collection is here.
+
+caption ig:
+Our new Gold collection is here ✨ #weddinginvitations
+
+---
+
+Here is what I want to post this week and the files I have:
+`;
+
+function banner(kind, html) {
+  $("#banner").innerHTML = html ? `<div class="banner ${kind}">${html}</div>` : "";
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, opts);
+  let body = null;
+  try { body = await res.json(); } catch { /* not json */ }
+  if (!res.ok) throw new Error(body?.detail || `${res.status} ${res.statusText}`);
+  return body;
+}
+
+async function loadStatus() {
+  try {
+    const s = await api("/api/status");
+    state.brands = s.brands;
+    $("#sheetMeta").textContent = s.error ? s.error : `${s.sheet} · ${s.brands.length} brand(s) · times in ${s.timezone}`;
+    setGoogle(s.google);
+    if (s.error) banner("bad", esc(s.error));
+  } catch (e) {
+    $("#sheetMeta").textContent = "not connected";
+    banner("bad", esc(e.message));
+  }
+}
+
+function setGoogle(who) {
+  state.google = who;
+  $("#who").textContent = who ? `Drive: ${who}` : "";
+  $("#signin").hidden = !!who;
+  updateImportButton();
+}
+
+$("#signin").onclick = async () => {
+  $("#signin").disabled = true;
+  $("#signin").textContent = "Finish sign-in in the new tab…";
+  try {
+    const r = await api("/api/auth/google", { method: "POST" });
+    setGoogle(r.google);
+    banner("", "");
+  } catch (e) {
+    banner("bad", `Google sign-in failed: ${esc(e.message)}`);
+  } finally {
+    $("#signin").disabled = false;
+    $("#signin").textContent = "Sign in with Google";
+  }
+};
+
+$("#copyPrompt").onclick = async e => {
+  e.preventDefault();
+  const text = AI_PROMPT.replace("{BRANDS}", state.brands.map(b => `${b.slug} (${b.platforms.join(", ")})`).join("; ") || "grandinvitation");
+  await navigator.clipboard.writeText(text);
+  banner("ok", "Prompt copied. Paste it into your AI, add what you want this week, and save the answer as a .md file.");
+};
+
+// ---- dropping -----------------------------------------------------------
+const drop = $("#drop");
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => startBatch([...e.dataTransfer.files]));
+$("#pick").onclick = () => $("#picker").click();
+$("#picker").onchange = e => startBatch([...e.target.files]);
+
+async function startBatch(files) {
+  if (!files.length) return;
+  const form = new FormData();
+  files.forEach(f => form.append("files", f, f.name));
+  banner("", "");
+  $("#pick").disabled = true;
+  $("#pick").textContent = "Reading…";
+  try {
+    const r = await api("/api/batch", { method: "POST", body: form });
+    show(r);
+  } catch (e) {
+    banner("bad", esc(e.message));
+  } finally {
+    $("#pick").disabled = false;
+    $("#pick").textContent = "Choose files…";
+    $("#picker").value = "";
+  }
+}
+
+$("#addFiles").onclick = () => $("#addPicker").click();
+$("#addPicker").onchange = async e => {
+  const form = new FormData();
+  [...e.target.files].forEach(f => form.append("files", f, f.name));
+  await api(`/api/batch/${state.batch}/files`, { method: "POST", body: form });
+  e.target.value = "";
+  await reReview();
+};
+
+$("#restart").onclick = () => {
+  state.batch = null;
+  $("#reviewView").hidden = true;
+  $("#dropView").hidden = false;
+  $("#result").innerHTML = "";
+  banner("", "");
+};
+
+// ---- review -------------------------------------------------------------
+function show(r) {
+  state.batch = r.batch;
+  state.reviews = r.reviews;
+  state.files = r.files;
+  $("#dropView").hidden = true;
+  $("#reviewView").hidden = false;
+  if (r.problems?.length) banner("bad", r.problems.map(esc).join("<br>"));
+  render();
+}
+
+function posts() { return state.reviews.map(r => r.post); }
+
+async function reReview() {
+  const r = await api(`/api/batch/${state.batch}/review`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ posts: posts() }),
+  });
+  state.reviews = r.reviews;
+  state.files = r.files;
+  render();
+}
+
+function scheduleReview() {
+  clearTimeout(reviewTimer);
+  reviewTimer = setTimeout(() => reReview().catch(e => banner("bad", esc(e.message))), 600);
+}
+
+function status(r) {
+  if (!r.post.include) return `<span class="chip dup">removed</span>`;
+  if (r.duplicate_of) return `<span class="chip dup">already scheduled</span>`;
+  if (!r.importable) return `<span class="chip bad">needs fixing</span>`;
+  if (Object.keys(r.platform_errors).length) return `<span class="chip warn">partly ready</span>`;
+  return `<span class="chip ok">ready</span>`;
+}
+
+function thumbs(r) {
+  const media = r.post.media;
+  if (!media.length) return `<div class="text">text post</div>`;
+  return media.map(n => {
+    if (!state.files.includes(n)) return `<div class="missing">missing<br>${esc(n)}</div>`;
+    const src = `/api/batch/${state.batch}/file/${encodeURIComponent(n)}`;
+    return isVideo(n) ? `<video src="${src}" muted preload="metadata" title="${esc(n)}"></video>`
+                      : `<img src="${src}" alt="${esc(n)}" title="${esc(n)}" loading="lazy">`;
+  }).join("");
+}
+
+function field(i, key, label, value, type = "text") {
+  return `<div><label>${label}</label><input data-i="${i}" data-k="${key}" type="${type}" value="${esc(value)}"></div>`;
+}
+
+function card(r) {
+  const p = r.post, i = r.index;
+  const brands = state.brands.map(b => `<option ${b.slug === p.brand ? "selected" : ""}>${esc(b.slug)}</option>`).join("");
+  const issues = [
+    ...(r.duplicate_of ? [`<li class="dup">Already in the Sheet as ${esc(r.duplicate_of)}; it won't be added again.</li>`] : []),
+    ...r.errors.map(e => `<li class="bad">✘ ${esc(e)}</li>`),
+    ...Object.entries(r.platform_errors).flatMap(([pl, es]) => es.map(e => `<li class="warn">${esc(pl)} only: ${esc(e)}</li>`)),
+    ...r.warnings.map(w => `<li class="warn">! ${esc(w)}</li>`),
+  ].join("");
+  const platforms = Object.keys(r.captions);
+  const tabs = platforms.map((pl, n) => `<button data-tab="${i}" data-pl="${pl}" class="${n === 0 ? "on" : ""}">${pl}</button>`).join("");
+  const first = platforms[0];
+  return `
+  <article class="card ${p.include ? "" : "off"}">
+    <div class="thumbs">${thumbs(r)}</div>
+    <div>
+      <div class="head">
+        <strong>${esc(p.heading || `${p.date} ${p.time}`)}</strong>
+        ${status(r)}
+        <span class="spacer"></span>
+        <label style="display:flex;align-items:center;gap:6px;color:var(--ink);font-size:14px">
+          <input type="checkbox" data-i="${i}" data-k="include" ${p.include ? "checked" : ""} style="width:auto"> include
+        </label>
+      </div>
+      <div class="fields">
+        <div><label>Brand</label><select data-i="${i}" data-k="brand"><option value=""></option>${brands}</select></div>
+        ${field(i, "date", "Date", p.date, /^\d{4}-\d{2}-\d{2}$/.test(p.date) ? "date" : "text")}
+        ${field(i, "time", "Time", p.time, /^\d{2}:\d{2}$/.test(p.time) ? "time" : "text")}
+        ${field(i, "platforms", "Platforms", p.platforms)}
+        <div><label>Type</label><select data-i="${i}" data-k="type">
+          ${["image", "carousel", "reel", "text"].map(t => `<option ${t === p.type.toLowerCase() ? "selected" : ""}>${t}</option>`).join("")}
+        </select></div>
+      </div>
+      ${field(i, "media", "Media (comma-separated, in order)", p.media.join(", "))}
+      <ul class="issues">${issues}</ul>
+      ${platforms.length ? `<div class="tabs">${tabs}</div>
+        <div class="preview" id="pv-${i}">${esc(r.captions[first])}</div>` : ""}
+      <details data-i="${i}">
+        <summary>Edit captions and link</summary>
+        <div style="display:grid;gap:8px;margin-top:8px">
+          ${field(i, "link", "Link", p.link)}
+          ${["caption", "caption_facebook", "caption_instagram", "caption_linkedin"].map(k => `
+            <div><label>${{caption: "Caption (all platforms)", caption_facebook: "Caption (Facebook)",
+              caption_instagram: "Caption (Instagram)", caption_linkedin: "Caption (LinkedIn)"}[k]}</label>
+            <textarea data-i="${i}" data-k="${k}">${esc(p[k])}</textarea></div>`).join("")}
+        </div>
+      </details>
+    </div>
+  </article>`;
+}
+
+function render() {
+  const rs = state.reviews;
+  // Re-rendering replaces every input; keep the one being typed in focused,
+  // with its caret, and keep open caption editors open.
+  const active = document.activeElement;
+  const keep = active?.dataset?.k ? { i: active.dataset.i, k: active.dataset.k,
+    s: active.selectionStart, e: active.selectionEnd } : null;
+  const open = [...document.querySelectorAll("details[open]")].map(d => d.dataset.i);
+  $("#cards").innerHTML = rs.map(card).join("") ||
+    `<div class="banner warn">No posts found in the plan. Each post starts with a "## YYYY-MM-DD HH:MM" heading.</div>`;
+  const ready = rs.filter(r => r.post.include && r.importable).length;
+  const bad = rs.filter(r => r.post.include && !r.importable && !r.duplicate_of).length;
+  const dup = rs.filter(r => r.duplicate_of).length;
+  $("#counts").innerHTML = `<span class="chip ok">${ready} ready</span> ` +
+    (bad ? `<span class="chip bad">${bad} need fixing</span> ` : "") +
+    (dup ? `<span class="chip dup">${dup} already scheduled</span>` : "");
+  open.forEach(i => { const d = $(`details[data-i="${i}"]`); if (d) d.open = true; });
+  if (keep) {
+    const el = $(`[data-i="${keep.i}"][data-k="${keep.k}"]`);
+    if (el) { el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch { /* date/checkbox */ } }
+  }
+  updateImportButton();
+}
+
+function updateImportButton() {
+  const ready = state.reviews.filter(r => r.post.include && r.importable).length;
+  const btn = $("#importBtn");
+  btn.disabled = !ready || !state.google;
+  btn.textContent = !state.google ? "Sign in with Google to import" : `Import ${ready} post(s)`;
+}
+
+$("#cards").addEventListener("input", e => {
+  const el = e.target, i = el.dataset.i, k = el.dataset.k;
+  if (i === undefined || !k) return;
+  const p = state.reviews[+i].post;
+  if (k === "include") { p.include = el.checked; render(); return; }
+  p[k] = k === "media" ? el.value.split(",").map(s => s.trim()).filter(Boolean) : el.value;
+  scheduleReview();
+});
+
+$("#cards").addEventListener("click", e => {
+  const b = e.target.closest("button[data-tab]");
+  if (!b) return;
+  const i = +b.dataset.tab;
+  b.parentElement.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  $(`#pv-${i}`).textContent = state.reviews[i].captions[b.dataset.pl];
+});
+
+// ---- import -------------------------------------------------------------
+$("#importBtn").onclick = async () => {
+  const btn = $("#importBtn");
+  btn.disabled = true;
+  btn.textContent = "Uploading to Drive and writing the Sheet…";
+  try {
+    const r = await api(`/api/batch/${state.batch}/import`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ posts: posts() }),
+    });
+    const added = Object.entries(r.rows_added);
+    const total = added.reduce((n, [, c]) => n + c, 0);
+    const list = (title, items) => items.length ? `<p><strong>${title}</strong></p><ul>${items.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : "";
+    $("#result").innerHTML = `<div class="result">
+      <div class="banner ${r.errors.length ? "warn" : "ok"}">${total} post(s) added to the Sheet${added.length ? ": " + added.map(([b, c]) => `${esc(b)} ${c}`).join(", ") : ""}.</div>
+      <p class="muted">The next scheduled run (within 15 minutes) gives them IDs and checks the files in Drive.
+      From then on they show in the Sheet's Status column and publish on time on their own.</p>
+      ${list("Problems", r.errors)}
+      ${list(`Uploaded to Drive (${r.uploaded.length})`, r.uploaded)}
+      ${list(`Already in Drive, reused (${r.reused.length})`, r.reused)}
+      ${list("Not added", r.skipped)}
+    </div>`;
+    await reReview();  // everything imported now shows as "already scheduled"
+  } catch (e) {
+    banner("bad", `Import failed: ${esc(e.message)}`);
+  } finally {
+    updateImportButton();
+  }
+};
+
+loadStatus();
+</script>
+</body>
+</html>
