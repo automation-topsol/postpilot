@@ -5,9 +5,10 @@
 **Everything is committed. Working tree clean. 316 tests pass, lint clean,
 `postpilot doctor` reports 22 ok / 2 warnings / 0 failures.**
 
-All seven phases are done. The three `doctor` warnings are expected states,
-not problems: LinkedIn access pending, Telegram unconfigured (by choice), and
-`restocklypos` having no org URN yet.
+All seven phases are done. The two `doctor` warnings are expected states,
+not problems, and share one cause — LinkedIn access is pending: no
+`LINKEDIN_ACCESS_TOKEN`, and `restocklypos` has no org URN yet. Both clear
+themselves when access lands. The daily summary goes by email (§0.5).
 
 ### The single most important open item
 
