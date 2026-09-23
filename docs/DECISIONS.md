@@ -808,3 +808,13 @@ capability is preserved, the footgun is not.
 runs to publish one specific post, that is the worst possible response: it
 looks exactly like the post going out. Naming a post that does not exist is now
 an error, checked before anything is leased.
+
+## CI runners are pinned to `ubuntu-24.04`, not `ubuntu-latest`
+
+The media pipeline depends on ffmpeg/ffprobe being preinstalled on the runner.
+`ubuntu-latest` moves to Ubuntu 26 on 2026-10-19, and a runner image that
+drops or changes ffmpeg would break every image and video post on the next
+cron tick, with nobody watching. Pinning makes the OS upgrade a deliberate,
+tested change instead of something that happens to us. The actions were moved
+to their Node 24 majors (`checkout@v7`, `setup-uv@v7`, `upload-artifact@v7`)
+in the same change, since Node 20 is deprecated on the runners.

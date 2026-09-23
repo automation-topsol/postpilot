@@ -357,7 +357,7 @@ Plus unit tests for row parsing, timezone/due selection, media policies
 
 `python3` 3.12.6 · `git` 2.50.1 · `uv` 0.12.17 · `ffmpeg`/`ffprobe` 9.0.2
 (installed via Homebrew) · `gh` **not installed** (no remote yet, §0.3).
-`ffmpeg`/`ffprobe` are preinstalled on `ubuntu-latest`; `doctor` checks for them.
+`ffmpeg`/`ffprobe` are preinstalled on `ubuntu-24.04`; `doctor` checks for them.
 
 ---
 
