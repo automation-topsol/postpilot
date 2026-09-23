@@ -163,6 +163,38 @@ class Settings(BaseModel):
         except ValueError:
             return None
 
+    # -- Email (optional by design — see CLAUDE.md §0.5) --------------------
+    @property
+    def smtp(self):
+        """None unless SMTP_USER, SMTP_PASSWORD and SUMMARY_TO are all set.
+
+        Host and port default to Gmail, the tested setup. `SUMMARY_TO` is a
+        comma-separated list, so the digest can go to several people.
+        """
+        from postpilot.notify import SmtpConfig
+
+        user, password = _env("SMTP_USER"), _env("SMTP_PASSWORD")
+        recipients = tuple(a.strip() for a in _env("SUMMARY_TO").split(",") if a.strip())
+        if not (user and password and recipients):
+            return None
+        host = _env("SMTP_HOST") or "smtp.gmail.com"
+        if "gmail" in host:
+            # Google displays app passwords as "abcd efgh ijkl mnop"; people
+            # paste them with the spaces. The password itself has none.
+            password = password.replace(" ", "")
+        try:
+            port = int(_env("SMTP_PORT") or 587)
+        except ValueError:
+            port = 587
+        return SmtpConfig(
+            host=host, port=port, user=user, password=password,
+            sender=_env("SMTP_FROM") or user, recipients=recipients,
+        )
+
+    @property
+    def has_notifier(self) -> bool:
+        return self.smtp is not None or self.telegram is not None
+
     # -- Telegram (optional by design — see CLAUDE.md §0.5) -----------------
     @property
     def telegram(self) -> tuple[str, str] | None:

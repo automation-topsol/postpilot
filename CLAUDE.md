@@ -2,8 +2,8 @@
 
 ## START HERE (session handoff, last updated 2026-09-23)
 
-**Everything is committed. Working tree clean. 302 tests pass, lint clean,
-`postpilot doctor` reports 21 ok / 3 warnings / 0 failures.**
+**Everything is committed. Working tree clean. 316 tests pass, lint clean,
+`postpilot doctor` reports 22 ok / 2 warnings / 0 failures.**
 
 All seven phases are done. The three `doctor` warnings are expected states,
 not problems: LinkedIn access pending, Telegram unconfigured (by choice), and
@@ -80,11 +80,15 @@ These were agreed after `CLAUDE_CODE_PROMPT.md` was written and **override it**:
 4. **Credentials live in `.env`**, filled in by the operator, never in chat and
    never committed. The Sheet ID, brand list and R2 base URL are read from
    `.env` / `config.yaml` — do not hardcode them anywhere.
-5. **Telegram is optional.** It is not set up, and the tool must work without
-   it. Missing `TELEGRAM_*` vars are a **`doctor` WARNING, never a failure**,
-   and `postpilot summary` writes the daily digest to the **`_Log` tab**
-   instead, so a summary is never silently lost. A missing notifier degrades
-   reporting, not delivery — nothing about publishing may depend on it.
+5. **The daily summary goes by email; every notifier is optional.** Gmail
+   SMTP with an app password (`SMTP_USER`, `SMTP_PASSWORD`, `SUMMARY_TO`, plus
+   optional `SMTP_HOST`/`SMTP_PORT`/`SMTP_FROM`), to one or more addresses.
+   Telegram remains as a second notifier behind the same interface
+   (`postpilot/notify.py`). With **no** notifier configured, `doctor` gives a
+   single **WARNING, never a failure**, and `postpilot summary` writes the
+   digest to the **`_Log` tab** instead, so it is never silently lost. A
+   missing notifier degrades reporting, not delivery — nothing about
+   publishing may depend on it.
 6. **No custom domain for R2.** `R2_PUBLIC_BASE_URL` is the `*.r2.dev`
    development URL, and that is the chosen configuration, not a temporary
    state to warn about. r2.dev is rate-limited and unsupported for production

@@ -364,13 +364,13 @@ def _brand_creds(settings: Settings, client) -> dict[str, BrandCreds]:
 @app.command()
 def summary(
     verbose: bool = typer.Option(False, "--verbose", "-v"),
-    to_log: bool = typer.Option(False, "--to-log", help="Skip Telegram and write to _Log."),
+    to_log: bool = typer.Option(False, "--to-log", help="Skip email/Telegram and write to _Log."),
 ) -> None:
-    """Send the daily digest to Telegram, or write it to `_Log` if that fails.
+    """Email the daily digest (and Telegram, if set), or write it to `_Log`.
 
     The digest is the only routine signal that the scheduler is alive, so it is
-    never silently skipped: if Telegram is unconfigured or refuses, the same
-    text goes to the `_Log` tab instead.
+    never silently skipped: if no notifier is configured, or none delivers, the
+    same text goes to the `_Log` tab instead.
     """
     from postpilot.summary import build_digest, render_text, send, to_log_entries
 
@@ -399,7 +399,7 @@ def summary(
         console.print(f"\n[green]✔[/green] {escape(detail)}")
         return
 
-    reason = "unconfigured" if not settings.has_telegram else "fallback"
+    reason = "unconfigured" if not settings.has_notifier else "fallback"
     client.append_log(to_log_entries(digest, settings.tunables.timezone, reason=reason))
     console.print(f"\n[yellow]![/yellow] {escape(detail)} — written to the _Log tab instead")
 

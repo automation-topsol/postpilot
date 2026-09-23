@@ -104,11 +104,20 @@ unsuffixed — `LINKEDIN_ACCESS_TOKEN`, `LINKEDIN_REFRESH_TOKEN`,
 Access tokens last ~60 days and refresh tokens ~1 year; `postpilot auth linkedin`
 refreshes automatically and prints the new values.
 
-### 5. Telegram
+### 5. Daily summary (email, optional Telegram)
 
-Create a bot with `@BotFather` → `TELEGRAM_BOT_TOKEN`; get the chat ID for
-wherever the summary should land → `TELEGRAM_CHAT_ID`. One digest a day at
-09:00 Asia/Karachi. No per-post pings.
+One digest a day at 09:00 Asia/Karachi. No per-post pings. Both notifiers are
+optional and independent; with neither, the digest is written to the `_Log`
+tab instead.
+
+**Email (Gmail).** Turn on 2-Step Verification for the sending account, create
+an app password at <https://myaccount.google.com/apppasswords>, then set
+`SMTP_USER` (the Gmail address), `SMTP_PASSWORD` (the app password — *not* the
+account password) and `SUMMARY_TO` (comma-separated recipients). `SMTP_HOST`,
+`SMTP_PORT` and `SMTP_FROM` default to Gmail and `SMTP_USER`.
+
+**Telegram.** Create a bot with `@BotFather` → `TELEGRAM_BOT_TOKEN`; get the
+chat ID for wherever the summary should land → `TELEGRAM_CHAT_ID`.
 
 ### 6. Verify, then go
 
@@ -133,7 +142,9 @@ R2_ACCOUNT_ID   R2_ACCESS_KEY_ID   R2_SECRET_ACCESS_KEY
 R2_BUCKET       R2_PUBLIC_BASE_URL
 META_APP_ID     META_APP_SECRET     META_PAGE_TOKEN_<SLUG>   (one per brand)
 LINKEDIN_ACCESS_TOKEN   LINKEDIN_REFRESH_TOKEN   LINKEDIN_TOKEN_EXPIRES
-TELEGRAM_BOT_TOKEN      TELEGRAM_CHAT_ID         (both optional)
+SMTP_USER   SMTP_PASSWORD   SUMMARY_TO                   (email, optional)
+SMTP_HOST   SMTP_PORT   SMTP_FROM     (only if not Gmail defaults)
+TELEGRAM_BOT_TOKEN      TELEGRAM_CHAT_ID             (optional)
 ```
 
 Adding a brand means adding its `META_PAGE_TOKEN_<SLUG>` secret **and** adding
@@ -163,7 +174,7 @@ postpilot status                      # what is upcoming / failed / needs review
 postpilot prepare                     # download, normalise and upload media
 postpilot publish --dry-run           # full pipeline, sends nothing, writes no lease
 postpilot publish --live --confirm    # local live publish — both flags required
-postpilot summary                     # digest to Telegram, or to _Log
+postpilot summary                     # digest by email/Telegram, or to _Log
 postpilot doctor                      # check every credential
 postpilot auth meta --brand <slug>    # mint a long-lived Page token
 postpilot auth linkedin [--refresh]   # one token for every Company Page

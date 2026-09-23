@@ -2,8 +2,8 @@
 
 Design rules, learned the hard way during the Phase 0 spike:
 
-- **A missing optional thing warns; a missing required thing fails.** Telegram
-  is optional by design, so its absence must never make a healthy install look
+- **A missing optional thing warns; a missing required thing fails.** Email
+  and Telegram are optional by design, so its absence must never make a healthy install look
   broken.
 - **Every failure names the fix**, not just the symptom. `AccessDenied` on a
   PUT means "the R2 token is read-only", not "check your credentials" — the
@@ -77,7 +77,7 @@ def run(settings: Settings, *, skip_network: bool = False) -> DoctorReport:
     _check_r2(report, settings)
     _check_meta(report, settings, brands)
     _check_linkedin(report, settings, brands)
-    _check_telegram(report, settings)
+    _check_notifiers(report, settings)
     return report
 
 
@@ -452,17 +452,47 @@ def _check_linkedin(report: DoctorReport, settings: Settings, brands: list) -> N
         report.ok("LinkedIn token", f"valid for {left} more day(s)")
 
 
+def _check_notifiers(report: DoctorReport, settings: Settings) -> None:
+    if not settings.has_notifier:
+        # Optional by design: a missing notifier degrades reporting, never
+        # delivery. `summary` falls back to the _Log tab. One warning, not one
+        # per notifier — an unconfigured Telegram next to a working email is
+        # a choice, not a problem.
+        report.warn(
+            "Daily summary",
+            "no email (SMTP_*/SUMMARY_TO) or Telegram configured — "
+            "`summary` will write the digest to the _Log tab instead",
+        )
+        return
+    _check_email(report, settings)
+    _check_telegram(report, settings)
+
+
+def _check_email(report: DoctorReport, settings: Settings) -> None:
+    from postpilot.notify import EmailNotifier
+
+    config = settings.smtp
+    if config is None:
+        return
+    # Log in only. Sending a test email on every `doctor` run trains people to
+    # ignore the sender, which is the one thing the digest cannot afford.
+    ok, detail = EmailNotifier(config).check_login()
+    if ok:
+        report.ok("Email (SMTP)", f"{detail} → {', '.join(config.recipients)}")
+    else:
+        report.fail(
+            "Email (SMTP)",
+            f"{config.host}:{config.port} — {detail}",
+            fix="Gmail needs 2-Step Verification on and an app password "
+            "(myaccount.google.com/apppasswords) in SMTP_PASSWORD, not the account password",
+        )
+
+
 def _check_telegram(report: DoctorReport, settings: Settings) -> None:
     import httpx
 
     credentials = settings.telegram
     if credentials is None:
-        # Optional by design: a missing notifier degrades reporting, never
-        # delivery. `summary` falls back to the _Log tab.
-        report.warn(
-            "Telegram",
-            "not configured — `summary` will write the daily digest to the _Log tab instead",
-        )
         return
 
     token, chat_id = credentials

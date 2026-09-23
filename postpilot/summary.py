@@ -1,7 +1,8 @@
 """The daily digest — the only routine signal that the scheduler is alive.
 
-Because that is what it is for, it must never be *silently* skipped. Telegram
-is optional by design (CLAUDE.md §0.5), so when it is unconfigured the same
+Because that is what it is for, it must never be *silently* skipped. Every
+notifier (email, Telegram — see `notify.py`) is optional by design
+(CLAUDE.md §0.5), so when none is configured, or none delivers, the same
 digest is written to the `_Log` tab instead, where it is durable, timestamped
 and visible to the teammate who already lives in the Sheet.
 
@@ -14,15 +15,12 @@ from __future__ import annotations
 import datetime as dt
 from dataclasses import dataclass, field
 
-import httpx
-
 from postpilot.logging import get_logger
 from postpilot.models import LogEntry, Platform, PlatformState, RowStatus
 from postpilot.sync import SyncResult
 
 log = get_logger(__name__)
 
-TELEGRAM_API = "https://api.telegram.org"
 UPCOMING_HOURS = 24
 TOKEN_WARN_DAYS = 7
 
@@ -122,7 +120,7 @@ def _token_warnings(result: SyncResult, settings, now: dt.datetime) -> list[str]
 
 
 def render_text(digest: Digest, tz_name: str) -> str:
-    """Plain text, readable in Telegram and in a spreadsheet cell alike."""
+    """Plain text, readable in an email, in Telegram and in a spreadsheet cell alike."""
     from zoneinfo import ZoneInfo
 
     local = digest.generated_at.astimezone(ZoneInfo(tz_name))
@@ -163,35 +161,49 @@ def render_text(digest: Digest, tz_name: str) -> str:
     return "\n".join(lines)
 
 
-def send(digest: Digest, settings, client=None, *, tz_name: str = "Asia/Karachi") -> tuple[bool, str]:
-    """Deliver via Telegram. Returns (delivered, detail).
+def render_subject(digest: Digest, tz_name: str) -> str:
+    """An inbox line that says whether to open it."""
+    from zoneinfo import ZoneInfo
 
-    Never raises: a notifier that crashes the run would turn a reporting
-    problem into a delivery problem.
+    local = digest.generated_at.astimezone(ZoneInfo(tz_name))
+    if digest.needs_attention:
+        state = f"{digest.needs_attention} row(s) need attention"
+    elif digest.warnings:
+        state = f"{len(dict.fromkeys(digest.warnings))} warning(s)"
+    else:
+        state = "all good"
+    return f"PostPilot {local:%a %d %b}: {state}"
+
+
+def send(
+    digest: Digest, settings, notifiers=None, *, tz_name: str = "Asia/Karachi"
+) -> tuple[bool, str]:
+    """Deliver through every configured notifier. Returns (delivered, detail).
+
+    Delivered means *at least one* notifier succeeded. Never raises: a
+    notifier that crashes the run would turn a reporting problem into a
+    delivery problem.
     """
+    from postpilot.notify import configured_notifiers
+
+    notifiers = configured_notifiers(settings) if notifiers is None else notifiers
+    if not notifiers:
+        return False, "no notifier is configured"
+
+    subject = render_subject(digest, tz_name)
     text = render_text(digest, tz_name)
-    credentials = settings.telegram
-    if credentials is None:
-        return False, "Telegram is not configured"
+    outcomes = []
+    for notifier in notifiers:
+        try:
+            outcomes.append(notifier.send(subject, text))
+        except Exception as exc:  # the Protocol says never raise; enforce it
+            outcomes.append((False, f"{notifier.name} crashed: {exc}"))
 
-    token, chat_id = credentials
-    try:
-        response = (client or httpx).post(
-            f"{TELEGRAM_API}/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
-            timeout=20,
-        )
-        body = response.json()
-    except Exception as exc:
-        return False, f"Telegram send failed: {exc}"
-
-    if body.get("ok"):
-        return True, f"delivered to {chat_id}"
-    return False, f"Telegram refused: {body.get('description', '')}"
+    return any(ok for ok, _ in outcomes), "; ".join(detail for _, detail in outcomes)
 
 
 def to_log_entries(digest: Digest, tz_name: str, *, reason: str) -> list[LogEntry]:
-    """The digest as `_Log` rows — the fallback when Telegram cannot deliver.
+    """The digest as `_Log` rows — the fallback when no notifier delivers.
 
     Written line by line rather than as one blob so it stays readable in a
     spreadsheet cell.

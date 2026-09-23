@@ -818,3 +818,22 @@ cron tick, with nobody watching. Pinning makes the OS upgrade a deliberate,
 tested change instead of something that happens to us. The actions were moved
 to their Node 24 majors (`checkout@v7`, `setup-uv@v7`, `upload-artifact@v7`)
 in the same change, since Node 20 is deprecated on the runners.
+
+## The daily summary goes by email, behind a notifier interface
+
+Email replaced Telegram as the primary channel because everyone who needs the
+digest already has an inbox, and nobody has to install anything or join a
+group. Gmail SMTP with an app password is the simplest thing that works from a
+GitHub runner: no OAuth consent screen, no token refresh, and an app password
+can be revoked on its own without touching the account. Every channel sits
+behind the same two-method shape in `postpilot/notify.py` — `name` and
+`send(subject, text) -> (delivered, detail)`, never raising — so Telegram
+stays as a second notifier for free and WhatsApp later is one class. The
+digest counts as delivered if *any* notifier succeeds; only when none does is
+it written to `_Log`. `doctor` logs in to SMTP but does not send: a test email
+on every run teaches people to ignore the sender, which is the one thing the
+digest cannot afford. It also reports a single "Daily summary" warning when no
+notifier is set, rather than one per channel, because an unconfigured Telegram
+beside a working email is a choice, not a problem. SMTP verifies TLS against
+certifi's bundle because macOS Python builds ship without a usable CA store
+and failed Gmail's certificate on the first real run.
