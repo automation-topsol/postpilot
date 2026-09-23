@@ -1,5 +1,55 @@
 # PostPilot — working agreement for Claude Code sessions
 
+## START HERE (session handoff, last updated 2026-09-23)
+
+**Everything is committed. Working tree clean. 302 tests pass, lint clean,
+`postpilot doctor` reports 21 ok / 3 warnings / 0 failures.**
+
+All seven phases are done. The three `doctor` warnings are expected states,
+not problems: LinkedIn access pending, Telegram unconfigured (by choice), and
+`restocklypos` having no org URN yet.
+
+### The single most important open item
+
+**`postpilot publish --live --confirm` has never actually published anything.**
+The adapters are covered by `respx` fixtures and reconciliation is verified
+against real data, but the full path — lease → prepare → adapter → record →
+roll-up — has only ever run in `--dry-run`. Phase 0 proved the Graph calls, but
+with the *spike's* code, not the adapter's.
+
+Do it on a **text-only Facebook post first**: no media pipeline, no Instagram
+container, smallest blast radius, and it still exercises the lease and the
+state machine end to end.
+
+```bash
+# set a row's Date/Time to now, then:
+uv run postpilot publish --live --confirm --post <id> --brand grandinvitation
+```
+
+### Waiting on the operator
+
+1. Delete the two Phase 0 test posts (the tool cannot — v1 has no deletion).
+2. Push to GitHub and add the secrets in the README; that is what actually
+   turns the scheduler on. There is no remote yet and `gh` is not installed.
+3. Telegram bot, if wanted. Until then the digest goes to `_Log`, by design.
+4. LinkedIn Community Management API access.
+
+### Things in the Sheet that are mine, not theirs
+
+`_Brands` was seeded by me with both brands. `grandinvitation` has **three
+sample rows** I added: one valid, one deliberately broken (a carousel with a
+missing second file, which is why `status` shows 1 invalid), and one text-only.
+Delete or repurpose them freely.
+
+### Reading order for the rest of this file
+
+§0 amendments (they override the original brief) · §3 the rules that keep the
+delivery guarantee true · §6 the phase table · §10-17 what each phase found ·
+**§18 the adversarial pass — seven real defects, two of which could publish
+twice.** `docs/DECISIONS.md` has the *why* behind every non-obvious choice.
+
+---
+
 **Read this file before touching anything.** It is the condensed design contract.
 The full, authoritative brief is `CLAUDE_CODE_PROMPT.md`; this file summarises it
 and records the amendments agreed since. Where the two disagree, the amendments
