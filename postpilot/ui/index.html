@@ -104,7 +104,9 @@
       <p>One <code>.md</code> plan and every image and video it mentions, all at once.</p>
       <p style="margin-top:14px">
         <button class="primary" id="pick">Choose files…</button>
+        <button id="pickFolder">Choose a folder…</button>
         <input type="file" id="picker" multiple hidden>
+        <input type="file" id="folderPicker" webkitdirectory hidden>
       </p>
       <p style="margin-top:14px"><a href="/template.md">Download the plan template</a> ·
         <a href="#" id="copyPrompt">Copy a prompt for your AI</a></p>
@@ -116,6 +118,8 @@
       <button id="restart">← Start over</button>
       <button id="addFiles">Add missing files…</button>
       <input type="file" id="addPicker" multiple hidden>
+      <button id="addFolder">Add a folder…</button>
+      <input type="file" id="addFolderPicker" webkitdirectory hidden>
       <span class="counts" id="counts"></span>
       <span class="spacer" style="flex:1"></span>
       <button class="primary" id="importBtn">Import</button>
@@ -219,18 +223,53 @@ $("#copyPrompt").onclick = async e => {
   banner("ok", "Prompt copied. Paste it into your AI, add what you want this week, and save the answer as a .md file.");
 };
 
+// A dropped folder arrives as one empty File, so walk it. A carousel kept in
+// its own folder is then named by its path: d02_p01/slide_01.png.
+// getAsEntry only works during the drop event, so the entries are taken
+// before the first await.
+async function droppedFiles(dt) {
+  const entries = [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return [...dt.files].map(file => ({ file, path: file.name }));
+  const out = [];
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) {
+      out.push({ file: await new Promise((ok, bad) => entry.file(ok, bad)), path: prefix + entry.name });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (let batch; (batch = await new Promise((ok, bad) => reader.readEntries(ok, bad))).length;) {
+        for (const e of batch) await walk(e, `${prefix}${entry.name}/`);
+      }
+    }
+  };
+  for (const e of entries) await walk(e, "");
+  return out;
+}
+const pickedFiles = list => [...list].map(file => ({ file, path: file.webkitRelativePath || file.name }));
+const isPlan = path => path.toLowerCase().endsWith(".md");
+
+// Paths are relative to the plan, so dropping the week's whole folder does not
+// turn d02_p01/slide_01.png into week-40/d02_p01/slide_01.png. Hidden files
+// (.DS_Store) are dropped.
+function relativeToPlan(items) {
+  items = items.filter(i => !i.path.split("/").some(p => p.startsWith(".")));
+  const plans = items.filter(i => isPlan(i.path));
+  const dir = plans.length === 1 ? plans[0].path.slice(0, plans[0].path.lastIndexOf("/") + 1) : "";
+  return items.map(i => ({ ...i, path: dir && i.path.startsWith(dir) ? i.path.slice(dir.length) : i.path }));
+}
+
 // ---- dropping -----------------------------------------------------------
 const drop = $("#drop");
 ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", e => startBatch([...e.dataTransfer.files]));
+drop.addEventListener("drop", async e => startBatch(await droppedFiles(e.dataTransfer)));
 $("#pick").onclick = () => $("#picker").click();
-$("#picker").onchange = e => startBatch([...e.target.files]);
+$("#pickFolder").onclick = () => $("#folderPicker").click();
+$("#picker").onchange = $("#folderPicker").onchange = e => startBatch(pickedFiles(e.target.files));
 
-async function startBatch(files) {
-  if (!files.length) return;
+async function startBatch(items) {
+  if (!items.length) return;
   const form = new FormData();
-  files.forEach(f => form.append("files", f, f.name));
+  relativeToPlan(items).forEach(i => form.append("files", i.file, i.path));
   banner("", "");
   $("#pick").disabled = true;
   $("#pick").textContent = "Reading…";
@@ -242,14 +281,15 @@ async function startBatch(files) {
   } finally {
     $("#pick").disabled = false;
     $("#pick").textContent = "Choose files…";
-    $("#picker").value = "";
+    $("#picker").value = $("#folderPicker").value = "";
   }
 }
 
 $("#addFiles").onclick = () => $("#addPicker").click();
-$("#addPicker").onchange = async e => {
+$("#addFolder").onclick = () => $("#addFolderPicker").click();
+$("#addPicker").onchange = $("#addFolderPicker").onchange = async e => {
   const form = new FormData();
-  [...e.target.files].forEach(f => form.append("files", f, f.name));
+  pickedFiles(e.target.files).forEach(i => form.append("files", i.file, i.path));
   await api(`/api/batch/${state.batch}/files`, { method: "POST", body: form });
   e.target.value = "";
   await reReview();

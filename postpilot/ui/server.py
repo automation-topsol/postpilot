@@ -62,10 +62,27 @@ def _review_json(index: int, review: Review) -> dict:
 
 
 def _safe_name(name: str) -> str:
-    cleaned = Path(name or "").name.strip()
-    if not cleaned or cleaned.startswith("."):
+    """A path relative to the batch, sub-folders kept: `d02_p01/slide_01.png`.
+
+    A carousel dropped as a folder is named by its path in the plan, so the
+    folder must survive. Nothing may climb out of the batch or hide.
+    """
+    parts = [p.strip() for p in (name or "").replace("\\", "/").split("/")]
+    parts = [p for p in parts if p not in ("", ".", "..")]
+    if not parts or any(p.startswith(".") for p in parts):
         raise HTTPException(400, f"bad file name {name!r}")
-    return cleaned
+    return "/".join(parts)
+
+
+def _listing(root: Path) -> list[str]:
+    return sorted(p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file())
+
+
+def _save(root: Path, upload: UploadFile) -> None:
+    path = root / _safe_name(upload.filename or "")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as out:
+        shutil.copyfileobj(upload.file, out)
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -100,7 +117,7 @@ def create_app(settings: Settings) -> FastAPI:
     def review(bid: str, posts: list[PlannedPost]) -> tuple[list[Review], dict]:
         client = sheet()
         brands = load_brands(client)
-        files = {p.name for p in (batch_dir(bid) / "files").iterdir()}
+        files = set(_listing(batch_dir(bid) / "files"))
         reviews = review_plan(posts, brands, files, existing_posts(client, brands, tz), tz)
         return reviews, brands
 
@@ -108,7 +125,7 @@ def create_app(settings: Settings) -> FastAPI:
         return {
             "batch": bid,
             "problems": problems or [],
-            "files": sorted(p.name for p in (batch_dir(bid) / "files").iterdir()),
+            "files": _listing(batch_dir(bid) / "files"),
             "reviews": [_review_json(i, r) for i, r in enumerate(reviews)],
         }
 
@@ -162,8 +179,7 @@ def create_app(settings: Settings) -> FastAPI:
         text = (await plans[0].read()).decode("utf-8", errors="replace")
         (root / "plan.md").write_text(text, encoding="utf-8")
         for upload in media:
-            with (root / "files" / _safe_name(upload.filename or "")).open("wb") as out:
-                shutil.copyfileobj(upload.file, out)
+            _save(root / "files", upload)
 
         posts, problems = parse_plan(text)
         reviews, _ = review(bid, posts)
@@ -174,9 +190,8 @@ def create_app(settings: Settings) -> FastAPI:
         """Add files forgotten in the first drop, without starting over."""
         target = batch_dir(bid) / "files"
         for upload in files:
-            with (target / _safe_name(upload.filename or "")).open("wb") as out:
-                shutil.copyfileobj(upload.file, out)
-        return {"files": sorted(p.name for p in target.iterdir())}
+            _save(target, upload)
+        return {"files": _listing(target)}
 
     @app.post("/api/batch/{bid}/review")
     def re_review(bid: str, body: PostsIn) -> dict:
@@ -184,7 +199,7 @@ def create_app(settings: Settings) -> FastAPI:
         reviews, _ = review(bid, posts)
         return payload(bid, reviews)
 
-    @app.get("/api/batch/{bid}/file/{name}")
+    @app.get("/api/batch/{bid}/file/{name:path}")
     def file(bid: str, name: str) -> FileResponse:
         path = batch_dir(bid) / "files" / _safe_name(name)
         if not path.is_file():

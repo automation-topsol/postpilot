@@ -105,7 +105,9 @@
       <p>One <code>.md</code> plan and every image and video it mentions, all at once.</p>
       <p style="margin-top:14px">
         <button class="primary" id="pick">Choose files…</button>
+        <button id="pickFolder">Choose a folder…</button>
         <input type="file" id="picker" multiple hidden>
+        <input type="file" id="folderPicker" webkitdirectory hidden>
       </p>
       <p style="margin-top:14px"><a href="#" id="showTemplate">Show the plan template</a> ·
         <a href="#" id="copyPrompt">Copy a prompt for your AI</a></p>
@@ -123,6 +125,8 @@
       <button id="restart">← Start over</button>
       <button id="addFiles">Add missing files…</button>
       <input type="file" id="addPicker" multiple hidden>
+      <button id="addFolder">Add a folder…</button>
+      <input type="file" id="addFolderPicker" webkitdirectory hidden>
       <span class="counts" id="counts"></span>
       <span class="spacer" style="flex:1"></span>
       <span class="progress" id="progress"></span>
@@ -237,26 +241,64 @@ $("#copyPrompt").onclick = e => {
     AI_PROMPT.replace("{BRANDS}", brands), "");
 };
 
+// A dropped folder arrives as one empty File, so walk it. A carousel kept in
+// its own folder is then named by its path: d02_p01/slide_01.png.
+// getAsEntry only works during the drop event, so the entries are taken
+// before the first await.
+async function droppedFiles(dt) {
+  const entries = [...dt.items].map(i => i.webkitGetAsEntry?.()).filter(Boolean);
+  if (!entries.length) return [...dt.files].map(file => ({ file, path: file.name }));
+  const out = [];
+  const walk = async (entry, prefix) => {
+    if (entry.isFile) {
+      out.push({ file: await new Promise((ok, bad) => entry.file(ok, bad)), path: prefix + entry.name });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (let batch; (batch = await new Promise((ok, bad) => reader.readEntries(ok, bad))).length;) {
+        for (const e of batch) await walk(e, `${prefix}${entry.name}/`);
+      }
+    }
+  };
+  for (const e of entries) await walk(e, "");
+  return out;
+}
+const pickedFiles = list => [...list].map(file => ({ file, path: file.webkitRelativePath || file.name }));
+const isPlan = path => path.toLowerCase().endsWith(".md");
+
+// Paths are relative to the plan, so dropping the week's whole folder does not
+// turn d02_p01/slide_01.png into week-40/d02_p01/slide_01.png. Hidden files
+// (.DS_Store) are dropped.
+function relativeToPlan(items) {
+  items = items.filter(i => !i.path.split("/").some(p => p.startsWith(".")));
+  const plans = items.filter(i => isPlan(i.path));
+  const dir = plans.length === 1 ? plans[0].path.slice(0, plans[0].path.lastIndexOf("/") + 1) : "";
+  return items.map(i => ({ ...i, path: dir && i.path.startsWith(dir) ? i.path.slice(dir.length) : i.path }));
+}
+
 // ---- dropping -----------------------------------------------------------
 const drop = $("#drop");
 ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
-drop.addEventListener("drop", e => startBatch([...e.dataTransfer.files]));
+drop.addEventListener("drop", async e => startBatch(await droppedFiles(e.dataTransfer)));
 $("#pick").onclick = () => $("#picker").click();
-$("#picker").onchange = e => startBatch([...e.target.files]);
+$("#pickFolder").onclick = () => $("#folderPicker").click();
+$("#picker").onchange = $("#folderPicker").onchange = e => startBatch(pickedFiles(e.target.files));
 
-function addFiles(list) {
-  for (const f of list) {
-    if (f.name.toLowerCase().endsWith(".md")) continue;
-    if (state.urls.has(f.name)) URL.revokeObjectURL(state.urls.get(f.name));
-    state.files.set(f.name, f);
-    state.urls.set(f.name, URL.createObjectURL(f));
+// Keyed by path relative to the plan, so slide_01.png in two carousel
+// folders stays two files.
+function addFiles(items) {
+  for (const { file, path } of items) {
+    if (isPlan(path)) continue;
+    if (state.urls.has(path)) URL.revokeObjectURL(state.urls.get(path));
+    state.files.set(path, file);
+    state.urls.set(path, URL.createObjectURL(file));
   }
 }
 
-async function startBatch(files) {
-  if (!files.length) return;
-  const plans = files.filter(f => f.name.toLowerCase().endsWith(".md"));
+async function startBatch(items) {
+  if (!items.length) return;
+  items = relativeToPlan(items);
+  const plans = items.filter(i => isPlan(i.path)).map(i => i.file);
   if (plans.length !== 1) { banner("bad", `Drop exactly one .md plan (found ${plans.length}).`); return; }
   banner("", "");
   $("#pick").disabled = true;
@@ -265,7 +307,7 @@ async function startBatch(files) {
     state.files.clear();
     state.urls.forEach(u => URL.revokeObjectURL(u));
     state.urls.clear();
-    addFiles(files);
+    addFiles(items);
     const r = await server("reviewPlanText", await plans[0].text(), [...state.files.keys()]);
     show(r);
   } catch (e) {
@@ -273,13 +315,14 @@ async function startBatch(files) {
   } finally {
     $("#pick").disabled = false;
     $("#pick").textContent = "Choose files…";
-    $("#picker").value = "";
+    $("#picker").value = $("#folderPicker").value = "";
   }
 }
 
 $("#addFiles").onclick = () => $("#addPicker").click();
-$("#addPicker").onchange = async e => {
-  addFiles([...e.target.files]);
+$("#addFolder").onclick = () => $("#addFolderPicker").click();
+$("#addPicker").onchange = $("#addFolderPicker").onchange = async e => {
+  addFiles(pickedFiles(e.target.files));
   e.target.value = "";
   await reReview();
 };
@@ -490,25 +533,29 @@ async function uploadFile(file, name, folderId, token) {
   return body;
 }
 
-async function ensureInDrive(file, folderId, folders, token, progress) {
+// The brand folder is flat: d02_p01/slide_01.png goes up as d02_p01_slide_01.png.
+// Same rule as importer.drive_name_for.
+const driveNameFor = path => path.split("/").filter(Boolean).join("_");
+
+async function ensureInDrive(file, wanted, folderId, folders, token, progress) {
   if (!folders.has(folderId)) folders.set(folderId, await listFolder(folderId, token));
   const files = folders.get(folderId);
   const key = n => n.trim().toLowerCase();
   const names = new Map();
   files.forEach(f => names.set(key(f.name), (names.get(key(f.name)) || 0) + 1));
 
-  progress(`Checking ${file.name}…`);
+  progress(`Checking ${wanted}…`);
   const md5 = await md5Of(file);
   const same = files.find(f => f.md5Checksum === md5 && names.get(key(f.name)) === 1);
   if (same) return { name: same.name, uploaded: false };
 
-  let name = file.name;
+  let name = wanted;
   if (names.get(key(name))) {
     const dot = name.lastIndexOf(".");
     name = dot > 0 ? `${name.slice(0, dot)}-${md5.slice(0, 6)}${name.slice(dot)}` : `${name}-${md5.slice(0, 6)}`;
-    if (names.get(key(name))) throw new Error(`cannot find a free name for ${file.name} in the Drive folder`);
+    if (names.get(key(name))) throw new Error(`cannot find a free name for ${wanted} in the Drive folder`);
   }
-  progress(`Uploading ${file.name}…`);
+  progress(`Uploading ${wanted}…`);
   const created = await uploadFile(file, name, folderId, token);
   files.push({ id: created.id, name: created.name, md5Checksum: created.md5Checksum || md5 });
   return { name: created.name, uploaded: true };
@@ -531,7 +578,7 @@ $("#importBtn").onclick = async () => {
       try {
         const renamed = [];
         for (const name of p.media) {
-          const got = await ensureInDrive(state.files.get(name), ctx.folders[p.brand], folders, ctx.token, progress);
+          const got = await ensureInDrive(state.files.get(name), driveNameFor(name), ctx.folders[p.brand], folders, ctx.token, progress);
           (got.uploaded ? uploaded : reused).push(got.name);
           renamed.push(got.name);
         }

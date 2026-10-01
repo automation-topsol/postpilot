@@ -11,7 +11,13 @@ from pathlib import Path
 
 import pytest
 
-from postpilot.importer import DriveUploader, existing_posts, import_reviews, load_brands
+from postpilot.importer import (
+    DriveUploader,
+    drive_name_for,
+    existing_posts,
+    import_reviews,
+    load_brands,
+)
 from postpilot.plan import PlannedPost, parse_plan, review_plan
 from postpilot.sheets.parse import parse_post
 from postpilot.sheets.schema import brand_headers
@@ -286,6 +292,13 @@ class TestDriveUploader:
         name, uploaded = DriveUploader(None, service=service).ensure("folder", local)
         assert uploaded and name != "a.png"
 
+    def test_a_wanted_name_is_used_and_suffixed_on_a_clash(self, tmp_path):
+        local = tmp_path / "slide_01.png"
+        local.write_bytes(b"NEW")
+        service = FakeDriveService([drive_entry("d02_p01_slide_01.png", b"OLD")])
+        name, uploaded = DriveUploader(None, service=service).ensure("folder", local, "d02_p01_slide_01.png")
+        assert uploaded and name == f"d02_p01_slide_01-{hashlib.md5(b'NEW').hexdigest()[:6]}.png"
+
     def test_second_use_in_one_batch_reuses_the_first_upload(self, tmp_path):
         local = tmp_path / "a.png"
         local.write_bytes(b"AAA")
@@ -298,6 +311,26 @@ class TestDriveUploader:
 
 # --------------------------------------------------------------------------
 class TestImport:
+    def test_folder_paths_go_to_drive_flat(self, tmp_path):
+        assert drive_name_for("d02_p01/slide_01.png") == "d02_p01_slide_01.png"
+        assert drive_name_for("promo.png") == "promo.png"
+
+    def test_a_carousel_folder_is_uploaded_flat_and_the_row_says_so(self, tmp_path):
+        for n in (1, 2):
+            (tmp_path / "d02_p01").mkdir(exist_ok=True)
+            (tmp_path / "d02_p01" / f"slide_0{n}.png").write_bytes(f"s{n}".encode())
+        plan = PLAN.replace("gold-1.png, gold-2.png", "d02_p01/slide_01.png, d02_p01/slide_02.png")
+        client = build([])
+        service = FakeDriveService()
+        reviews, _ = reviews_for(plan, files={"d02_p01/slide_01.png", "d02_p01/slide_02.png", "promo.png"})
+        import_reviews(
+            reviews, files_dir=tmp_path, brands=load_brands(client),
+            client=client, uploader=DriveUploader(None, service=service),
+        )
+        assert [c["name"] for c in service.created][:2] == ["d02_p01_slide_01.png", "d02_p01_slide_02.png"]
+        tab = client.read("grandinvitation")
+        assert tab.rows[0][tab.headers.index("Media")] == "d02_p01_slide_01.png, d02_p01_slide_02.png"
+
     def setup_files(self, tmp_path: Path) -> Path:
         for name in ("gold-1.png", "gold-2.png", "promo.png"):
             (tmp_path / name).write_bytes(name.encode())
@@ -416,6 +449,32 @@ class TestServer:
         assert len(body["reviews"]) == 3
         assert body["reviews"][0]["importable"] is True
         assert body["files"] == ["gold-1.png", "gold-2.png"]
+
+    def test_carousel_folders_keep_their_paths(self, app):
+        # Two carousels, each a folder with its own slide_01.png.
+        plan = (
+            "brand: grandinvitation\n\n## 2099-10-02 18:30\nplatforms: FB, IG\ntype: carousel\n"
+            "media: d02_p01/slide_01.png, d02_p01/slide_02.png\ncaption: one\n\n"
+            "## 2099-10-03 18:30\nplatforms: FB, IG\ntype: carousel\n"
+            "media: d03_p01/slide_01.png, d03_p01/slide_02.png\ncaption: two\n"
+        )
+        files = [("files", ("output.md", plan.encode(), "text/markdown"))] + [
+            ("files", (f"{d}/slide_0{n}.png", f"{d}{n}".encode(), "image/png"))
+            for d in ("d02_p01", "d03_p01") for n in (1, 2)
+        ]
+        body = app.post("/api/batch", files=files).json()
+        assert body["files"] == ["d02_p01/slide_01.png", "d02_p01/slide_02.png",
+                                 "d03_p01/slide_01.png", "d03_p01/slide_02.png"]
+        assert [r["importable"] for r in body["reviews"]] == [True, True]
+        thumb = app.get(f"/api/batch/{body['batch']}/file/d03_p01%2Fslide_02.png")
+        assert thumb.status_code == 200 and thumb.content == b"d03_p012"
+
+    def test_hidden_files_are_refused(self, app):
+        files = [
+            ("files", ("plan.md", b"## 2099-01-01 10:00\n", "text/markdown")),
+            ("files", ("d02/.DS_Store", b"x", "application/octet-stream")),
+        ]
+        assert app.post("/api/batch", files=files).status_code == 400
 
     def test_needs_exactly_one_plan(self, app):
         response = app.post("/api/batch", files=[("files", ("a.png", b"1", "image/png"))])

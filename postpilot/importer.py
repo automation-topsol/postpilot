@@ -12,7 +12,10 @@ Drive rules, so `Media` names always resolve to exactly one file:
 - a file whose bytes (md5) are already in the folder is **reused**, not
   uploaded again — re-importing a plan costs nothing;
 - a new file whose name is already taken is uploaded as `name-<md5[:6]>.ext`,
-  because two files with one name is the "ambiguous" error `sync` refuses.
+  because two files with one name is the "ambiguous" error `sync` refuses;
+- a file dropped inside a folder (`d02_p01/slide_01.png`) is uploaded flat as
+  `d02_p01_slide_01.png`: the brand folder has no sub-folders, and every
+  carousel's `slide_01.png` would otherwise fight over one name.
 """
 
 from __future__ import annotations
@@ -113,7 +116,7 @@ class DriveUploader:
             self._folders[folder_id] = files
         return self._folders[folder_id]
 
-    def ensure(self, folder_id: str, local: Path) -> tuple[str, bool]:
+    def ensure(self, folder_id: str, local: Path, wanted: str | None = None) -> tuple[str, bool]:
         """Make `local` present in the folder. Returns (name to use, uploaded?)."""
         md5 = md5_of(local)
         files = self.list_folder(folder_id)
@@ -124,9 +127,10 @@ class DriveUploader:
             if existing.md5 == md5 and names[existing.name.strip().casefold()] == 1:
                 return existing.name, False
 
-        name = local.name
+        name = wanted or local.name
         if names[name.casefold()]:
-            name = f"{local.stem}-{md5[:6]}{local.suffix}"
+            stem, suffix = Path(name).stem, Path(name).suffix
+            name = f"{stem}-{md5[:6]}{suffix}"
             if names[name.casefold()]:  # vanishingly unlikely; never guess
                 raise RuntimeError(f"cannot find a free name for {local.name!r} in the Drive folder")
 
@@ -190,7 +194,9 @@ def import_reviews(
         try:
             renamed = []
             for name in post.media:
-                drive_name, uploaded = uploader.ensure(brand.drive_folder_id, files_dir / name)
+                drive_name, uploaded = uploader.ensure(
+                    brand.drive_folder_id, files_dir / name, drive_name_for(name)
+                )
                 (result.uploaded if uploaded else result.reused).append(drive_name)
                 renamed.append(drive_name)
         except Exception as exc:
@@ -216,6 +222,11 @@ def import_reviews(
     result.uploaded = list(dict.fromkeys(result.uploaded))
     result.reused = list(dict.fromkeys(result.reused))
     return result
+
+
+def drive_name_for(path: str) -> str:
+    """`d02_p01/slide_01.png` -> `d02_p01_slide_01.png`; a bare name is unchanged."""
+    return "_".join(part for part in path.replace("\\", "/").split("/") if part)
 
 
 def batch_id(now: dt.datetime | None = None) -> str:

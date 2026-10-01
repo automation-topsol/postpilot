@@ -56,7 +56,7 @@ Stock counts in half the time.
 | `brand:` | The brand's **slug** from the `_Brands` tab. One `brand:` line above the first post sets a default. |
 | `platforms:` | Any of `FB, IG, LI`. |
 | `type:` | `image` (1 image) · `carousel` (2–10 images) · `reel` (1 video) · `text` (no media — not possible on Instagram). |
-| `media:` | File names **exactly as the files you drop**, comma-separated, in carousel order. |
+| `media:` | File names **exactly as the files you drop**, comma-separated, in carousel order. A file inside a folder is named by its path from the plan: `d02_p01/slide_01.png`. |
 | `link:` | Optional. Added to Facebook and LinkedIn captions; Instagram ignores it. |
 | `caption:` | The text for every platform. Can run over many lines. |
 | `caption fb:` / `caption ig:` / `caption li:` | Optional per-platform text. The brand's default hashtags are added to Instagram only when its caption has no `#` of its own. |
@@ -80,6 +80,12 @@ posted this week and the file names, and save the answer as `plan.md`.
 Drag the `.md` plan **and every image and video it mentions** onto the page,
 all at once (or use **Choose files…**). Forgot one? **Add missing files…**
 adds it without starting over.
+
+Carousels can stay in their own folders. Drop the folders with the plan, or
+drop (or **Choose a folder…**) the one folder that holds the plan and
+everything else — paths are read relative to the plan, so
+`week40/d02_p01/slide_01.png` is `d02_p01/slide_01.png` in the plan. Hidden
+files such as `.DS_Store` are ignored.
 
 ## 3. Check the preview
 
@@ -107,6 +113,10 @@ into each brand's Drive folder as you.
   uploaded again.
 - A new file whose name is already taken is uploaded as `name-1a2b3c.png`, so
   the Sheet never sees two files with one name.
+- A file from a folder goes up **flat**, folder and name joined by `_`:
+  `d02_p01/slide_01.png` becomes `d02_p01_slide_01.png` in Drive and in the
+  Sheet's `Media`. The brand folder has no sub-folders, and this keeps every
+  carousel's `slide_01.png` distinct.
 - Rows are added to each brand's tab with **ID blank**. The next scheduled run
   (within 15 minutes) assigns IDs and checks everything, and from then on the
   posts behave exactly like hand-typed rows: they show in the Sheet's `Status`
