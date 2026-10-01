@@ -90,7 +90,7 @@ def _check_tools(report: DoctorReport) -> None:
             report.fail(
                 binary,
                 "not on PATH — video normalisation will fail",
-                fix="brew install ffmpeg (preinstalled on GitHub's ubuntu-latest)",
+                fix="brew install ffmpeg (macOS) / apt-get install ffmpeg (Linux)",
             )
 
 

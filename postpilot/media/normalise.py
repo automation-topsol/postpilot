@@ -224,7 +224,7 @@ class VideoInfo:
 
 def probe(path: Path) -> VideoInfo:
     if not shutil.which(FFPROBE):
-        raise MediaError("ffprobe is not installed — cannot inspect video (brew install ffmpeg)")
+        raise MediaError("ffprobe is not installed — cannot inspect video (install ffmpeg: brew on macOS, apt-get on Linux)")
 
     result = subprocess.run(
         [FFPROBE, "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(path)],
@@ -262,7 +262,7 @@ def _parse_fps(value: str) -> float:
 def normalise_video(data: bytes, policy: VideoPolicy, *, source_name: str = "") -> NormalisedMedia:
     """Re-encode to H.264/AAC MP4 satisfying `policy`."""
     if not shutil.which(FFMPEG):
-        raise MediaError("ffmpeg is not installed — cannot normalise video (brew install ffmpeg)")
+        raise MediaError("ffmpeg is not installed — cannot normalise video (install ffmpeg: brew on macOS, apt-get on Linux)")
 
     notes: list[str] = []
     with tempfile.TemporaryDirectory(prefix="postpilot-") as tmp:

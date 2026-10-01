@@ -811,7 +811,10 @@ an error, checked before anything is leased.
 
 ## CI runners are pinned to `ubuntu-24.04`, not `ubuntu-latest`
 
-The media pipeline depends on ffmpeg/ffprobe being preinstalled on the runner.
+The media pipeline depends on ffmpeg/ffprobe. (Correction, 2026-10-01: they are
+*not* preinstalled on `ubuntu-24.04` — a reel failed in Actions with "ffmpeg is
+not installed". `publish.yml` now apt-installs them and prints both versions,
+so a missing binary fails the whole run visibly instead of each video row.)
 `ubuntu-latest` moves to Ubuntu 26 on 2026-10-19, and a runner image that
 drops or changes ffmpeg would break every image and video post on the next
 cron tick, with nobody watching. Pinning makes the OS upgrade a deliberate,

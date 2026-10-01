@@ -57,9 +57,19 @@ jobs:
           enable-cache: true
           cache-dependency-glob: uv.lock
 
-      # ffmpeg and ffprobe are preinstalled on ubuntu-24.04; `doctor` checks.
-      # Pinned, not ubuntu-latest: a runner image change must not be able to
-      # drop ffmpeg and break every media post overnight.
+      # ffmpeg is NOT on the ubuntu-24.04 image (an earlier assumption that it
+      # was made every video post fail permanently). Install it explicitly, and
+      # fail the step loudly if it is still missing, rather than letting each
+      # video row fail one by one.
+      - name: Install ffmpeg
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -1
+          ffprobe -version | head -1
+
       - name: Install dependencies
         run: uv sync --frozen
 

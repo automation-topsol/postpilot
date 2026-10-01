@@ -44,8 +44,8 @@ uv sync
 cp .env.example .env            # then fill it in as you go through the steps below
 ```
 
-`ffmpeg`/`ffprobe` are preinstalled on `ubuntu-24.04`, so they are a local-only
-install. `postpilot doctor` checks for them.
+`ffmpeg`/`ffprobe` are **not** on GitHub's `ubuntu-24.04` image; `publish.yml`
+installs them with `apt-get` on every run. Locally: `brew install ffmpeg`. `postpilot doctor` checks for them.
 
 ### 1. Google service account
 
