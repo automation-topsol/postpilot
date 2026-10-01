@@ -218,6 +218,10 @@ One-time deploy (needs Node for `npx`):
    **No `--type`**: with `--type sheets`, clasp 3 ignores `--parentId` and
    makes a new, empty spreadsheet instead.
 4. `npx @google/clasp push -f && npx @google/clasp deploy -d "importer"`
+   The manifest turns on the **Drive advanced service**. The page never calls
+   it, but turning it on is what switches the Drive API on in the script's
+   hidden Cloud project; without it, uploads fail with "Google Drive API has
+   not been used in project … or it is disabled".
 5. Open the web app URL it prints (also: Sheet → Extensions → Apps Script →
    Deploy → Manage deployments). The first visit asks you to authorise Sheets
    + Drive access; you may need **Advanced → Go to PostPilot Importer**.

@@ -1,5 +1,14 @@
 {
   "timeZone": "Asia/Karachi",
+  "dependencies": {
+    "enabledAdvancedServices": [
+      {
+        "userSymbol": "Drive",
+        "serviceId": "drive",
+        "version": "v3"
+      }
+    ]
+  },
   "runtimeVersion": "V8",
   "exceptionLogging": "STACKDRIVER",
   "webapp": {
