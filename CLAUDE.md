@@ -10,7 +10,15 @@ not problems, and share one cause — LinkedIn access is pending: no
 `LINKEDIN_ACCESS_TOKEN`, and `restocklypos` has no org URN yet. Both clear
 themselves when access lands. The daily summary goes by email (§0.5).
 
-### Newest: the local weekly importer (§0.7) — built, NOT yet run for real
+### Newest (2026-10-01): hosted importer on Apps Script (§0.8)
+
+`webapp/` — the importer hosted free by Google, only openable by the
+operator. Tested against fakes and held equal to `plan.py` by
+`tests/test_webapp_parity.py`; deploy steps in README "Hosted importer".
+Also fixed: `publish.yml` now apt-installs ffmpeg (it is NOT on
+`ubuntu-24.04`; a reel failed in Actions because of it).
+
+### Earlier: the local weekly importer (§0.7)
 
 `postpilot ui` is written, tested (fakes only), and its **preview** was run
 against the real Sheet read-only. It has **never uploaded to Drive or
@@ -109,6 +117,14 @@ These were agreed after `CLAUDE_CODE_PROMPT.md` was written and **override it**:
    `sync`** (a concurrent `_State` rewrite can double-publish — see
    DECISIONS). Plan format: `docs/WEEKLY_IMPORT.md`. Code: `plan.py`,
    `importer.py`, `auth/google.py`, `ui/`.
+8. **The importer may also be hosted — on Google Apps Script only** (agreed
+   2026-10-01, replacing "never deployed" in 0.7). `webapp/` is bound to the
+   Sheet, deployed `access: MYSELF` / `executeAs: USER_DEPLOYING`, free, and
+   holds no secrets: the browser uploads to Drive with the operator's own
+   short-lived token. The same limits as 0.7 apply — append brand-tab rows
+   only, never `_State`/`_Log`, never `sync`, never publish. `Logic.js` is a
+   port of `plan.py`; `tests/test_webapp_parity.py` holds them equal. Any
+   other host (Render, a VM, Cloud Run) is still out of bounds.
 
 ---
 
@@ -130,9 +146,10 @@ editing/deleting after publish, or multi-user permissions. It stays
 **CLI + Sheet + GitHub Actions**. If a task seems to need infrastructure,
 that is a signal the design is being misread — re-read, don't build a server.
 
-**One operator-approved exception:** the local-only weekly importer (§0.7).
-It is a convenience front end for the Sheet and Drive, outside the delivery
-path. Do not grow it into a hosted app or give it publishing powers.
+**One operator-approved exception:** the weekly importer (§0.7), local or
+hosted on Apps Script (§0.8). It is a convenience front end for the Sheet and
+Drive, outside the delivery path. Do not move it to any other host or give it
+publishing powers.
 
 ---
 
@@ -310,7 +327,7 @@ Rules:
 | `postpilot doctor` | full environment check |
 | `postpilot auth meta --brand slug` / `auth linkedin` | guided token acquisition |
 | `postpilot auth google` | sign in as the operator, for the importer's Drive uploads |
-| `postpilot ui` | local weekly importer — §0.7 |
+| `postpilot ui` | local weekly importer — §0.7 (hosted twin in `webapp/`, §0.8) |
 
 Note `auth linkedin` takes **no** `--brand` (one token, all pages) — this
 differs from the original brief per §0.1.

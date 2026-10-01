@@ -3,9 +3,17 @@
 Make the week's material wherever you like, write one plan file, drop both
 into PostPilot, check the preview, click **Import**. That's the whole job.
 
+Use the **hosted importer** — the web app URL bookmarked from the README's
+"Hosted importer" setup. It opens in the browser, only for your Google
+account, with nothing to run. The local version still works the same way:
+
 ```bash
 uv run postpilot ui          # opens http://127.0.0.1:8766
 ```
+
+The two differ only in small ways: on the hosted page, **Show the plan
+template** displays the template to copy or download, and there is no
+**Sign in with Google** button — you are already signed in.
 
 ---
 

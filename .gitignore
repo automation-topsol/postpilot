@@ -34,3 +34,7 @@ htmlcov/
 .idea/
 .vscode/
 .playwright-mcp/
+
+# --- Apps Script (clasp) project binding: account-specific ---
+.clasp.json
+.clasprc.json

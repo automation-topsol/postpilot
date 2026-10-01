@@ -1,0 +1,14 @@
+{
+  "timeZone": "Asia/Karachi",
+  "runtimeVersion": "V8",
+  "exceptionLogging": "STACKDRIVER",
+  "webapp": {
+    "access": "MYSELF",
+    "executeAs": "USER_DEPLOYING"
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets.currentonly",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/userinfo.email"
+  ]
+}

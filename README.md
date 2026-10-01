@@ -197,6 +197,39 @@ scheduler is in charge. If you also run the launchd job
 (`scripts/install-local-launchd.sh`), disable the GitHub Actions cron — run
 one or the other, never both.
 
+### Hosted importer (Google Apps Script) — the everyday way
+
+The same importer, hosted free by Google and bound to the Sheet, so no
+terminal is needed. Only the Google account that deploys it can open it
+(`"access": "MYSELF"`), it runs as that account, and the browser uploads files
+straight to Drive. Code: `webapp/`. It never publishes — it only appends rows.
+
+One-time deploy (needs Node for `npx`):
+
+1. Turn on **Google Apps Script API** at https://script.google.com/home/usersettings.
+2. `npx @google/clasp login` — sign in as the account that owns the Sheet.
+3. Create the script bound to the Sheet (reads `SHEET_ID` from `.env`):
+   ```bash
+   set -a; source .env; set +a
+   npx @google/clasp create --type sheets --title "PostPilot Importer" \
+       --parentId "$SHEET_ID" --rootDir webapp
+   ```
+4. `npx @google/clasp push -f && npx @google/clasp deploy -d "importer"`
+5. Open the web app URL it prints (also: Sheet → Extensions → Apps Script →
+   Deploy → Manage deployments). The first visit asks you to authorise Sheets
+   + Drive access; you may need **Advanced → Go to PostPilot Importer**.
+
+Updating later — keep the URL by redeploying the same deployment:
+
+```bash
+npx @google/clasp push -f
+npx @google/clasp deployments                   # copy the importer's ID
+npx @google/clasp deploy -i <deployment-id> -d "importer"
+```
+
+`webapp/Logic.js` is a port of `plan.py`; `tests/test_webapp_parity.py` fails
+if the two ever judge a plan differently, so change them together.
+
 ### Local importer (`postpilot ui`)
 
 A page on `127.0.0.1` where you drop a week's `.md` plan plus its files,

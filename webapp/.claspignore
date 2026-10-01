@@ -1,0 +1,7 @@
+# Only these files are pushed to Apps Script.
+**/**
+!appsscript.json
+!Code.js
+!Logic.js
+!Index.html
+!PlanTemplate.html

@@ -841,6 +841,26 @@ beside a working email is a choice, not a problem. SMTP verifies TLS against
 certifi's bundle because macOS Python builds ship without a usable CA store
 and failed Gmail's certificate on the first real run.
 
+## The importer is hosted on Google Apps Script, and nowhere else
+
+Asked for "the importer without running it locally, free". Three options were
+weighed: Apps Script, a free container host (Render / Hugging Face Spaces)
+running the existing FastAPI app, and a GitHub Actions "inbox" folder.
+Apps Script won on what it does *not* need. A container host would hold the
+operator's Google refresh token — Drive-wide access — on a third party, behind
+a password we would have to build. Apps Script runs as the operator inside
+Google, is gated by Google's own login (`access: MYSELF`), and stores nothing:
+the page asks the server for a short-lived OAuth token and uploads straight
+to the Drive API, which also sidesteps Apps Script's request-size limits for
+video. The cost is that the review logic exists twice, in Python and in
+`webapp/Logic.js`. That is exactly the kind of copy that drifts, so
+`tests/test_webapp_parity.py` runs both on the same plans — including the
+messy date/time shapes and every error branch — and fails on any difference.
+The hosted page keeps every limit of the local one: it appends brand-tab rows
+in the tab's own column order as plain text (the Apps Script equivalent of
+`RAW`), re-reviews against the live Sheet under a script lock immediately
+before writing, and never touches `_State`, `_Log` or IDs.
+
 ## A local importer, as an exception to "no web UI"
 
 The brief rules out a web UI, and the reason still holds: nothing about
