@@ -211,9 +211,12 @@ One-time deploy (needs Node for `npx`):
 3. Create the script bound to the Sheet (reads `SHEET_ID` from `.env`):
    ```bash
    set -a; source .env; set +a
-   npx @google/clasp create --type sheets --title "PostPilot Importer" \
+   npx @google/clasp create --title "PostPilot Importer" \
        --parentId "$SHEET_ID" --rootDir webapp
+   git checkout webapp/appsscript.json   # create overwrites the manifest
    ```
+   **No `--type`**: with `--type sheets`, clasp 3 ignores `--parentId` and
+   makes a new, empty spreadsheet instead.
 4. `npx @google/clasp push -f && npx @google/clasp deploy -d "importer"`
 5. Open the web app URL it prints (also: Sheet → Extensions → Apps Script →
    Deploy → Manage deployments). The first visit asks you to authorise Sheets
